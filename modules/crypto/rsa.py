@@ -210,7 +210,29 @@ def hastad_broadcast(pairs):
     return None
 
 
-def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None):
+def shared_prime_attack(n1, n2, e, c):
+    """Two moduli sharing a prime factor (broken RNG). Compute gcd(n1,n2)."""
+    shared = math.gcd(n1, n2)
+    if shared <= 1 or shared == n1 or shared == n2:
+        return []
+    results = []
+    # Try decrypting with n1's factorization
+    for label, n_val in [("n1", n1), ("n2", n2)]:
+        p = shared
+        q = n_val // p
+        if p * q != n_val:
+            continue
+        phi = (p - 1) * (q - 1)
+        try:
+            dd = invmod(e, phi)
+            pt = strip_zeros(long_to_bytes(pow(c, dd, n_val)))
+            results.append((f"shared-prime({label})", pt))
+        except Exception:
+            pass
+    return results
+
+
+def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None):
     """Try every attack and return a list of found plaintexts (bytes)."""
     found = []
 
@@ -271,5 +293,12 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None):
             found.append(("wiener", strip_zeros(long_to_bytes(pow(c, dd, n)))))
     except Exception:
         pass
+
+    # 5) shared prime (two moduli with gcd > 1)
+    if n2 is not None:
+        try:
+            found.extend(shared_prime_attack(n, n2, e, c))
+        except Exception:
+            pass
 
     return found
