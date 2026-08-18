@@ -56,6 +56,12 @@ def _try_rsa_params(text):
         m = re.search(rf"(?im)^\s*{key}\s*[=:]\s*(\d+)\s*$", text)
         if m:
             vals[key] = int(m.group(1))
+    # Also look for n1/n2 pattern (shared-prime RSA)
+    n1_val = re.search(r"(?im)^\s*n1\s*[=:]\s*(\d+)\s*$", text)
+    n2_val = re.search(r"(?im)^\s*n2\s*[=:]\s*(\d+)\s*$", text)
+    if n1_val and n2_val:
+        vals["n"] = int(n1_val.group(1))
+        vals["n2"] = int(n2_val.group(1))
     if not vals:
         # maybe plain space-separated ints: n e c
         toks = re.findall(r"\d{30,}", text)
@@ -70,6 +76,7 @@ def _try_rsa_params(text):
     for label, pt in rsa_mod.crack_rsa(
         n=vals.get("n"), e=vals.get("e"), c=vals.get("c"),
         d=vals.get("d"), p=vals.get("p"), q=vals.get("q"),
+        n2=vals.get("n2"),
     ):
         try:
             text_out = pt.decode("utf-8", "replace")
@@ -240,6 +247,85 @@ def _hash_crack(text):
     return []
 
 
+def _binary_xor_analysis(data):
+    """Simple single-byte XOR brute force on binary data — only returns hits
+    when the result is >90% printable AND has decent English text score."""
+    flags = []
+    if len(data) < 16:
+        return flags
+    for k in range(256):
+        xored = bytes(b ^ k for b in data)
+        printable = sum(32 <= b < 127 for b in xored)
+        if printable > len(data) * 0.9:
+            text = xored.decode("latin-1", "replace")
+            # Require some English quality (not just printable garbage)
+            letters = sum(c.isalpha() for c in text)
+            if letters < len(text) * 0.3:
+                continue  # too few letters — likely garbage XOR
+            for f in _flag_hits(text):
+                if f not in flags:
+                    flags.append(f)
+    return flags
+
+
+def _solve_klg3(data):
+    """Solve KLG3 ledger format: position-bound SHA-256 proof + Base85 + XOR.
+    Format: KLG3(4) + seed(18) + anchor(16) + n(2) + records...
+    Each record: ln(2) + proof(12) + enc(ln) bytes.
+    For each record, find original index (0..5) via SHA-256 proof,
+    Base85-decode enc, XOR with SHA-256 stream to get plaintext,
+    verify with anchor. Only the verified record is the real flag."""
+    import base64, hashlib, struct
+    flags = []
+    try:
+        b = data
+        assert b[:4] == b"KLG3"
+        seed = b[4:22]         # 18 bytes ("ledger-quorum-2026")
+        anchor = b[22:38]      # 16 bytes (verification hash)
+        n = struct.unpack(">H", b[38:40])[0]  # number of records
+        p = 40
+        candidates = []
+        for _ in range(n):
+            if p + 14 > len(b):
+                break
+            ln = struct.unpack(">H", b[p:p+2])[0]
+            proof = b[p+2:p+14]   # 12 bytes
+            enc = b[p+14:p+14+ln] # Base85-encoded encrypted data
+            p += 14 + ln
+            # Find original key index (0..5) by checking SHA-256 proof
+            orig = None
+            for i in range(6):
+                h = hashlib.sha256(seed + enc + i.to_bytes(2, "big")).digest()
+                if h[:12] == proof:
+                    orig = i
+                    break
+            if orig is None:
+                continue
+            # Base85 decode
+            raw = base64.b85decode(enc)
+            # Derive XOR key from SHA-256
+            key = hashlib.sha256(seed + bytes([orig]) + b"/quorum").digest()
+            # Generate key stream
+            ks = b""
+            j = 0
+            while len(ks) < len(raw):
+                ks += hashlib.sha256(key + j.to_bytes(4, "big")).digest()
+                j += 1
+            # XOR to get plaintext
+            plain = bytes(x ^ y for x, y in zip(raw, ks))
+            # Verify with anchor
+            if hashlib.sha256(seed + enc).digest()[:16] == anchor:
+                candidates.append(plain)
+        # Extract flags from verified records
+        for plain in candidates:
+            for f in _flag_hits(plain.decode("latin-1", "replace")):
+                if f not in flags:
+                    flags.append(f)
+    except Exception:
+        pass
+    return flags
+
+
 def analyze_file(path, as_binary=None):
     """Analyze a file: text decoders, binary sniffing, strings scanning."""
     with open(path, "rb") as f:
@@ -269,6 +355,19 @@ def analyze_file(path, as_binary=None):
         results.extend(classic.try_all_classic(text))
         results.extend(xor_mod.crack_xor(text))
 
+    # RSA parameter parsing (works on text files with n=/e=/c= patterns)
+    try:
+        as_text = data.decode("utf-8", errors="ignore")
+        if sum(1 for c in as_text if c.isprintable()) / max(len(as_text), 1) > 0.8:
+            rsa_results = _try_rsa_params(as_text)
+            for label, text_out in rsa_results:
+                results.append((label, text_out))
+                for f in _flag_hits(text_out):
+                    if f not in flags:
+                        flags.append(f)
+    except Exception:
+        pass
+
     # base64 blobs inside binary (common: flag hidden in base64 in png/zip)
     for m in re.finditer(rb"[A-Za-z0-9+/=]{40,}", data):
         blob = m.group(0)
@@ -281,6 +380,19 @@ def analyze_file(path, as_binary=None):
                         flags.append(f)
         except Exception:
             pass
+
+    # KLG3 ledger format (position-bound SHA-256 + Base85 + XOR)
+    if data[:4] == b"KLG3":
+        klflags = _solve_klg3(data)
+        for f in klflags:
+            if f not in flags:
+                flags.append(f)
+
+    # binary XOR analysis — try header-derived keys
+    xor_flags = _binary_xor_analysis(data)
+    for f in xor_flags:
+        if f not in flags:
+            flags.append(f)
 
     # zip members
     if data[:2] == b"PK":
