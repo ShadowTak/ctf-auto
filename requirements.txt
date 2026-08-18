@@ -1,0 +1,4 @@
+# ไม่มี dependency บังคับ — tool รันด้วย Python stdlib ล้วน
+# ติดตั้ง optional ต่อไปนี้เพื่อเพิ่มความสามารถ:
+# pycryptodome   # AES/ChaCha/RC4 สำหรับ crypto โมเดิร์น
+# requests       # HTTP client ที่เร็วขึ้น (ถ้าไม่มีใช้ urllib แทน)

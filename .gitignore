@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Tool output
+reports/
+*.pcap
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+*.orig
+*.rej
+
+# Secrets — never commit
+*.pem
+*.key
+.env
+.lab_cookies.txt
