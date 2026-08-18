@@ -590,7 +590,7 @@ def try_all_classic(text):
     results.extend(solve_railfence(text))
     cands = solve_columnar(text)
     results.extend(cands)
-    if re.fullmatch(r"[abAB\s]+", text):
+    if re.fullmatch(r"[abAB01\s]+", text):
         results.append(("bacon", dec_bacon(text)))
     try:
         results.extend(solve_substitution(text))

@@ -194,10 +194,24 @@ def auto_lab(category=None, limit=None):
     # summary (show at most 3 flags per challenge — decode noise is real,
     # and real known-prefix flags are shown first)
     def real_first(flist):
-        from core.flag import FLAG_RE
-        real = [f for f in flist if FLAG_RE.fullmatch(f.strip())]
-        rest = [f for f in flist if f not in real]
-        return real + rest
+        from core.flag import FLAG_RE, _body_ratio
+        def score(f):
+            s = f.strip()
+            body = s[s.find("{") + 1:s.rfind("}")] if "{" in s else ""
+            pts = 0
+            if FLAG_RE.fullmatch(s):
+                pts += 10          # known prefix
+            if len(body) >= 8:
+                pts += 5           # real flag bodies are longish
+            if body.islower() or (body and body[0].islower()):
+                pts += 4           # flags are lowercase-ish; 'HTB{sOwT}' style
+                                     # garbage rarely is
+            if " " not in body and all(c.isalnum() or c in "_{}-!" for c in body):
+                pts += 3
+            if body.startswith("<password>"):
+                pts -= 8           # unfilled template
+            return pts
+        return sorted(flist, key=score, reverse=True)
 
     print()
     section("🏁 AUTO LAB SUMMARY")

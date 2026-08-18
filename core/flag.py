@@ -69,7 +69,11 @@ def wrap_known_prefix(text):
     """Some challenges hide the flag *without* braces (decoded plaintext like
     'AEGISCTFnotwhatitseems' or 'SCRIPTCTFNOTWHATITSEEMS'). If a known flag
     prefix is immediately followed by more identifier chars, report it wrapped:
-    AegisCTF{notwhatitseems}. Returns a list of wrapped flag strings."""
+    AegisCTF{notwhatitseems}. Returns a list of wrapped flag strings.
+
+    Also emits the lowercase-body variant (flag bodies are almost always
+    lowercase — e.g. decoded 'SCRIPTCTFNOTWHATITSEEMS' must become
+    scriptCTF{notwhatitseems}, not SCRIPTCTF{NOTWHATITSEEMS})."""
     out = []
     for m in _PREFIX_WRAP_RE.finditer(text or ""):
         tok = m.group(0)
@@ -78,10 +82,15 @@ def wrap_known_prefix(text):
             pl = prefix.lower()
             if low.startswith(pl) and len(tok) > len(prefix):
                 body = tok[len(prefix):]
-                # longest-prefix match, skip when a shorter prefix ate the
-                # longer one (e.g. 'aegis' vs 'aegisctf')
+                # try every matching prefix (not just the longest) — the
+                # challenge's canonical prefix may be a mixed-case variant
+                # like 'scriptCTF' which lowercases to the same stem
                 out.append(f"{tok[:len(prefix)]}{{{body}}}")
-                break
+                if body.isupper() and len(body) >= 4:
+                    out.append(f"{tok[:len(prefix)]}{{{body.lower()}}}")
+                # also try the prefix spelled exactly as in _KNOWN
+                if prefix != tok[:len(prefix)] and prefix.isalnum():
+                    out.append(f"{prefix}{{{body.lower() if body.isupper() else body}}}")
     return list(dict.fromkeys(out))
 
 

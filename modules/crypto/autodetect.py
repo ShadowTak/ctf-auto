@@ -114,6 +114,18 @@ def analyze_text(text):
         ("length-ext", lambda: _length_ext_job(text)),
         ("xor", lambda: xor_mod.crack_xor(text)),
     ]
+    # Bacon's cipher is a 5-bit grouping over 0/1 (or A/B) — a binary-
+    # looking string is *exactly* its signature, yet looks_like_encoding
+    # classifies "100010..." as hex and skips the classic solvers. Run it
+    # unconditionally on such inputs (cheap: groups of 5).
+    if re.fullmatch(r"[01ABab\s]+", text.strip()) and len(text.strip()) >= 15:
+        def _bacon_job():
+            try:
+                return [("bacon", classic.dec_bacon(text.strip()))]
+            except Exception:
+                return []
+
+        jobs.append(("bacon", _bacon_job))
     if not encoded:
         # classic ciphers (caesar/vigenere/substitution/…) only make sense
         # on language-like text, not on base64/hex blobs
