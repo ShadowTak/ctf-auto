@@ -17,7 +17,8 @@ _KNOWN = (
     r"blazctf|Srdnlen|CSAWQual|Insomni|KAPO|KONAN|Metaspolit|b01lers|BYUCTF|"
     r"CyberApocalypse|DanteCTF|DawgCTF|KITCTF|MCTF|m0leCon|RGBCTF|SHELL|"
     r"STHACK|TCP1P|TFCCTF|TJWCTF|TRX|UMassCTF|WannaGame|we45|YBN|ZJUCTF|"
-    r"scriptCTF|ScriptCTF|SCRIPTCTF"
+    r"scriptCTF|ScriptCTF|SCRIPTCTF|THCTT|thctt|THCTT24|THCTT2024|TCTT|tctt|"
+    r"WTCTT|wtctt|NCSA|ncsa|THAICTF|thaictf|CYBERTHON|cyberthon"
 )
 # fmt: on
 

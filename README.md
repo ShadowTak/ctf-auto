@@ -5,8 +5,8 @@
 
 | หมวด | ความสามารถ |
 |------|-----------|
-| 🌐 **Web** | recon (headers/robots/tech), **keep-alive HTTP pool + retry** (dirbust เร็วหลายเท่า, ทน connection reset), directory brute-force (threaded, 545+ paths + API/actuator), SQLi / XSS / LFI / SSTI / Command Injection / open-redirect / SSRF fuzz (**fuzz ทุก endpoint + ลิงก์ที่มี query param**), **form POST fuzz** (SQLi auth-bypass / CMDi / SSTI / XSS ในทุก field), **asset & JS crawl**, **error-trigger 500 leak hunt**, **AES-CTR bit-flip attack** (auto-detect `/encrypt`+`/decrypt`), **GraphQL introspection** (enumerate fields → query flag), **JSON mass-assignment / NoSQLi probe** (`$ne`/`$gt` + token follow-up), **cookie forge** (base64-JSON → role=admin), **IDOR enumeration** (numeric param + path ids), JWT attack, backup file & source disclosure (.git/.env/.bak), **shared soft-404 calibration** (ตัด false positive), flag scan |
-| 🔐 **Crypto** | auto-detect & decode ทุกวิธี (base16/32/64/85, hex, binary, octal, morse, brainfuck, ROT13/47, leet, gzip/zlib, file-magic sniff) + **chain-decode หลายชั้น** + **payload extraction หลัง label** (`cipher:`/`cipher_hex:`) + classic ciphers (Caesar, **Vigenere auto-key: sweep + flag-prefix crib + per-char indexing**, Affine, Atbash, Railfence, **Bacon 0/1**, Playfair, Hill, Columnar, substitution solver ด้วย quadgram annealing) + RSA attacks (**auto-detect ไฟล์ n/e/c**, small-e, Wiener, Fermat, PEM/DER parser, **integer-only iroot**) + XOR (single/multi-byte, flag-prefix crib) + **hash identify/crack + flag-template** (`AegisCTF{<password>}` → เติมค่าที่ crack ได้) + **SHA-256 length extension attack** (forge MAC จาก (msg, mac) คู่เดียว) — เก็บ flag จาก **ทุก** ผล decode (ไม่ตัดด้วย ranking) |
+| 🌐 **Web** | recon (headers/robots/tech), **keep-alive HTTP pool + retry** (dirbust เร็วหลายเท่า, ทน connection reset), directory brute-force (threaded, 545+ paths + API/actuator), SQLi / XSS / LFI / SSTI / Command Injection / open-redirect / SSRF fuzz (**fuzz ทุก endpoint + ลิงก์ที่มี query param**), **form POST fuzz** (SQLi auth-bypass / CMDi / SSTI / XSS ในทุก field), **login brute-force** (THCTT WebAccessControl: common creds + 4-digit PIN 0000-9999, form + JSON endpoint, detect success จาก baseline), **asset & JS crawl**, **error-trigger 500 leak hunt**, **AES-CTR bit-flip attack**, **GraphQL introspection**, **JSON mass-assignment / NoSQLi probe** (`$ne`/`$gt` + token follow-up), **cookie forge**, **IDOR enumeration**, JWT attack, backup file & source disclosure (.git/.env/.bak), **shared soft-404 calibration**, flag scan |
+| 🔐 **Crypto** | auto-detect & decode ทุกวิธี (base16/32/45/58/62/64/85, hex, binary, octal, morse, brainfuck, Ook!, **Malbolge**, ROT13/47, leet, gzip/zlib, file-magic sniff) + **beam-search chain-decode หลายชั้น** (แตกทุกเส้นทาง เก็บทุก flag — ผ่าน TCTT base85→base45 chain) + **custom-alphabet base-N** (Thai alphabet `ก-ฮ+๐-๙+0-9` แบบ THCTT New Base64, emoji base-100) + **emoji solver** (2-state → binary, unicode-offset 0x1F3F7, substitution word-matching) + **base62 case-recovery** (THCTT Bad62: enumerate case variants ต่อ chunk + flag-body scoring) + payload extraction หลัง label (`cipher:`/`cipher_hex:`) + classic ciphers (Caesar, **Vigenere auto-key: sweep + flag-prefix crib + per-char indexing**, Affine, Atbash, Railfence, **Bacon 0/1**, Playfair, Hill, Columnar, substitution solver ด้วย quadgram annealing) + RSA attacks (**auto-detect ไฟล์ n/e/c**, small-e, Wiener, Fermat, PEM/DER parser, **integer-only iroot**) + XOR (single/multi-byte, flag-prefix crib, **wordlist-key crib** แบบ THCTT) + **hash identify/crack + flag-template** (`AegisCTF{<password>}` → เติมค่าที่ crack ได้) + **SHA-256 length extension attack** — เก็บ flag จาก **ทุก** ผล decode (ไม่ตัดด้วย ranking) |
 | 🌍 **Network** | nmap port scan (socket fallback), banner grabbing, **pure-Python pcap/pcapng analyzer** (TCP reassembly, HTTP extraction, flag hunt ใน UDP/ICMP exfil), DNS recon (records / zone transfer / subdomain brute) |
 
 คุณสมบัติ:
@@ -58,6 +58,9 @@ ctf-auto/
 
 ```bash
 python3 verify_vectors.py        # ตรวจ AES/ChaCha20/RC4/MT19937/RSA/classic/XOR/HLE กับ test vector มาตรฐาน
+python3 test_tctt_vectors.py     # ตรวจ decoder แบบ TCTT: base45/58/62+Bad62/36, Thai custom-base64,
+                                 #   emoji (bits/offset/base100/subst), Ook!, Malbolge (Hello World)
+python3 test_login.py            # login brute-force กับ server จำลอง (NCSA + PIN 4 หลัก)
 python3 run_web_test.py          # รัน test server ใน thread + web scan จริง
 python3 run_chain_test.py        # ทดสอบ auto chain network -> web
 ```
@@ -72,6 +75,24 @@ hash-crack (`AegisCTF{chocolate}`), single-byte-xor, **aes-ctr-bitflip**
 command-injection-basic, sqli-101, xss-reflected, aes-ctr-bitflip ✅ —
 ที่เหลือ (cookie-manipulation, blind-sqli, ssrf-basics, nosql-injection,
 mass-assignment) ยังต้องเพิ่มเทคนิคเฉพาะ
+
+## 🇹🇭 แนวข้อ Thailand Cyber Top Talent (TCTT)
+
+Tool นี้ปรับตาม writeup TCTT หลายปี (2021-2025) — pattern ที่เจอบ่อยและวิธีใช้ tool:
+
+| ปี/หมวด | โจทย์ที่เจอ | วิธีใช้ tool |
+|--------|-----------|-------------|
+| 2025 Crypto | **Advanced Strings Secret** — base85 → base45 → **Malbolge** | `--category crypto --target file` → chain-decode แตกอัตโนมัติ + Malbolge interpreter ในตัว |
+| 2025 Crypto | **New Base64** — custom alphabet ภาษาไทย `ก-ฮ+๐-๙+0-9` (UTF-16, `==` pad) | custom-base decoder รู้จัก construction นี้ → ถอดได้เอง |
+| 2025 Crypto | **Bad62** — base62 ที่ alphabet โดน lowercase | base62 case-recovery: enumerate case variants ต่อ chunk + flag-body scoring |
+| 2024 Crypto | **emoBit** — 😺/😸 = binary → emoji → ลบ offset 0x1F3F7 | emoji solver: 2-state → bits → emoji-offset |
+| 2024 Crypto | **Easy1/2, Programming** — base32→base64 chain, hex+reverse, emoji substitution → md5 flag | chain-decode + emoji-subst (word-matching) |
+| 2024 Prog. | **XOR + wordlist** — key เป็นคำใน list, ผลมีคำนั้น | `xor-wordlist` crib: ลองทุกคำใน wordlist เป็น repeating key |
+| 2021 Web | **WebAccessControl** — login brute PIN 4 หลัก (username เริ่มต้น NCSA) | `login brute-force`: common creds + PIN 0000-9999 อัตโนมัติ |
+| 2022 Web | **Web-challenge04** — dirbust หา `/s/e/c/r/e/t/`, PHP `.inc` โชว์ secret | dirbust 545+ paths + backup/source leak checks |
+| 2021 Web | **WebSecretKey** — hidden directory + secret | dirbust + recon |
+
+Flag format ที่รู้จักแล้ว: `THCTT{...}`, `THCTT24{...}`, `THCTT2024{...}`, `tctt2022{...}`, `TCTT{...}`, `NCSA{...}`, `WTCTT{...}`
 
 ## 🎯 คู่มือใช้แข่ง CTF (ฉบับมือใหม่ → โปร)
 

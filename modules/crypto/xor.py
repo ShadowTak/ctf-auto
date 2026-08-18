@@ -261,9 +261,71 @@ def known_plaintext_xor(data, known):
     return bytes(key), plain
 
 
+_COMMON_KEYS = [
+    "password", "secret", "key", "flag", "admin", "root", "thailand",
+    "thai", "ncsa", "cyber", "talent", "ctf", "funny", "hello", "world",
+    "orange", "apple", "banana", "monkey", "hacker", "pwned", "crypto",
+    "cipher", "decode", "encrypt", "victory", "winner", "challenge",
+    "aegis", "aegisctf", "htb", "pico", "letmein", "welcome", "master",
+]
+
+
+def wordlist_crib_xor(data, top=5):
+    """THCTT-style: the repeating key is a dictionary word and the plaintext
+    contains that word ('message XORed with a word from the list, the result
+    contains that word'). Tries every word from the bundled password list +
+    common keys as the repeating key and scores the decrypted text."""
+    from .common import text_score
+
+    data = _to_bytes(data)
+    if not data or len(data) > 8000:
+        return []
+    words = list(_COMMON_KEYS)
+    try:
+        import os
+        for cand in (
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), "wordlists", "passwords.txt"),
+        ):
+            if os.path.exists(cand):
+                with open(cand, encoding="utf-8", errors="replace") as fh:
+                    words += [w.strip() for w in fh if w.strip()]
+                break
+    except Exception:
+        pass
+    seen = set()
+    out = []
+    for w in words:
+        w = w.strip()
+        if not w or w in seen:
+            continue
+        seen.add(w)
+        key = w.encode("latin-1", "replace")
+        if not 2 <= len(key) <= 40:
+            continue
+        plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        try:
+            text = plain.decode("latin-1")
+        except Exception:
+            continue
+        if not is_printable_text(text):
+            continue
+        s = text_score(text)
+        if s == float("inf"):
+            continue
+        # require either the word itself in the result (the THCTT spec) or a
+        # strongly-English score (generic case)
+        if w.lower() not in text.lower() and s >= 55:
+            continue
+        out.append((s, w, text))
+    out.sort(key=lambda t: t[0])
+    return [(f"wordlist key='{w}' (score {round(s,1)})", t)
+            for s, w, t in out[:top]]
+
+
 def crack_xor(data, known_plaintext=None):
-    """Auto path: crib (decisive for CTF) -> single-byte -> repeating-key.
-    The full repeating-key anneal only runs when the crib found nothing."""
+    """Auto path: crib (decisive for CTF) -> single-byte -> repeating-key ->
+    wordlist-key. The expensive anneal only runs when the crib found nothing."""
     from .common import text_score
 
     out = []
@@ -289,6 +351,11 @@ def crack_xor(data, known_plaintext=None):
         cands = repeating_key_xor(data, top=5)
         for label, plain in cands:
             out.append(("xor-repeating " + label, plain))
+    # dictionary-word key (THCTT programming pattern)
+    if not crib_hit:
+        cands = wordlist_crib_xor(data, top=4)
+        for label, plain in cands:
+            out.append(("xor-wordlist " + label, plain))
     if known_plaintext:
         try:
             key, plain = known_plaintext_xor(data, known_plaintext)
