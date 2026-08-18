@@ -506,6 +506,17 @@ def solve_substitution(text, iterations=None):
     letters = _norm(text)
     if not letters or len(letters) < 20:
         return []
+    # Long inputs are almost never substitution ciphertext — they are source
+    # code / logs / HTML that slipped into the pipeline (annealing on 1500+
+    # chars of Python source costs tens of seconds for zero signal). Real
+    # substitution CTF challenges are short (100-2000 letters) and nearly
+    # all-alphabetic (punct-heavy Python source is not a monoalphabetic
+    # substitution).
+    if len(letters) > 3000:
+        return []
+    non_alpha = sum(1 for c in text if not c.isalpha()) / max(len(text), 1)
+    if non_alpha > 0.30 and not re.fullmatch(r"[01ABab\s]+", text.strip()):
+        return []
     import random
     rng = random.Random(1337)
     has_quad = load_quadgrams()

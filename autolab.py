@@ -111,18 +111,25 @@ def _web_lab(cookie, ch, wait=300):
         warn_line("  instance URL ไม่ได้ — ข้าม")
         return []
     ok_line(f"  lab RUNNING: {url}")
-    # give the app a moment to accept connections
+    # give the app a moment to accept connections; some labs redirect / to
+    # itself (302 loop) so also probe the manifest healthcheck path
     from core import httpx
+    probes = [url + "/", url + "/health", url + "/healthz"]
     up = False
     for _ in range(30):
-        if httpx.get(url + "/", timeout=3) is not None:
-            up = True
+        for p in probes:
+            r = httpx.get(p, timeout=3)
+            if r is not None and r.status < 500:
+                up = True
+                break
+        if up:
             break
         time.sleep(2)
     if not up:
         warn_line("  ยังเชื่อมต่อไม่ได้ — รอเพิ่ม 15s แล้วลองอีกครั้ง")
         time.sleep(15)
-        if httpx.get(url + "/", timeout=3) is None:
+        r = httpx.get(probes[0], timeout=3)
+        if r is None or r.status >= 500:
             warn_line("  lab ยังไม่ตอบสนอง — ข้าม")
             return []
     from modules.web.scanner import run_web
