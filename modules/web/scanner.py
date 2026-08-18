@@ -13,6 +13,7 @@ from . import graphql as graphql_mod
 from . import interact as interact_mod
 from . import injections as inj_mod
 from . import jwt as jwt_mod
+from . import login as login_mod
 from . import recon as recon_mod
 
 
@@ -153,6 +154,18 @@ def run_web(target, interactive=False):
         # also scan the homepage body + linked endpoints for flags
         known, cands = extract_flags(page.text)
         flags.extend(known + cands)
+
+    # 4a) login brute force (default creds / PIN / wordlist)
+    print()
+    print("── Login brute force ──")
+    page = httpx.get(base + "/", timeout=10)
+    if page is not None:
+        login_find, login_flags = login_mod.run_login_brute(base, page.text)
+        for line in login_find:
+            print(line)
+        flags.extend(login_flags)
+        if not login_find:
+            warn_line("ไม่พบฟอร์ม login / ยังไม่เจอ credential ที่ใช้ได้")
 
     # 5) JWT + cookies
     print()
