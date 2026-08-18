@@ -164,7 +164,12 @@ def request(method, url, data=None, headers=None, timeout=10,
         if r.status in (301, 302, 303, 307, 308):
             loc = r.headers.get("location")
             if loc:
-                current = urllib.parse.urljoin(current, loc)
+                nxt = urllib.parse.urljoin(current, loc)
+                # redirect loop (302 -> same path) — return what we have
+                # instead of exhausting _MAX_REDIRECTS and reporting None
+                if nxt == current:
+                    return r
+                current = nxt
                 if r.status == 303 and method.upper() != "GET":
                     method = "GET"
                     body = None

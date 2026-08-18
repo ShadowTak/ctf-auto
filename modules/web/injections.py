@@ -57,7 +57,16 @@ CMDI_PAYLOADS = [
     ("\nid", "uid="),
 ]
 
-REDIRECT_MARKERS = ["https://evil.example.com", "//evil.example.com", "javascript:alert(1)"]
+REDIRECT_MARKERS = [
+    # protocol-relative only. Full-scheme markers (https://evil.example.com)
+    # made SSRF-style endpoints (server-side http.get) crash the app with
+    # Node's ERR_INVALID_PROTOCOL — killing the lab mid-scan and taking the
+    # concurrent SSRF probes down with it. `//host` is the canonical open-
+    # redirect marker and never triggers server-side fetching.
+    "//evil.example.com",
+    "/\\evil.example.com",
+    "//evil.example.com/%2f%2f",
+]
 SSRF_MARKERS = ["http://127.0.0.1", "http://169.254.169.254", "http://localhost"]
 
 

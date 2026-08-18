@@ -1056,6 +1056,15 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
 
     Returns list of (path_label, text) for every layer of every kept branch,
     e.g. ('base64>hex>rot13', 'redactedCTF{...}')."""
+    # Multi-layer encoding chains in CTF are short blobs. Long inputs (source
+    # code, logs, config files) explode the beam with dozens of plausible
+    # substrings — no flag hides under 20 layers of a 5 KB file. Punctuation-
+    # heavy text (Python source etc.) is also never a layered encoding chain.
+    if len(text) > 4000:
+        return chain_decode(text, max_depth=6)
+    non_alnum = sum(1 for c in text if not (c.isalnum() or c in "+/=" )) / max(len(text), 1)
+    if non_alnum > 0.25:
+        return chain_decode(text, max_depth=6)
     results = []
     frontier = [(text, "")]
     seen_nodes = {text}
