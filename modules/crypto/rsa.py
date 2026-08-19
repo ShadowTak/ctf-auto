@@ -113,24 +113,28 @@ def parse_pem(data):
 # Attack primitives
 # ---------------------------------------------------------------------------
 def small_e_attack(c, e, n):
-    """If m^e < n we can just take the integer root."""
+    """If m^e < n we can just take the integer root. Only tries when e is
+    actually small (<= 65537) — a large e means the message is padded and
+    small-e is hopeless anyway."""
+    if e > 65537:
+        return None
     k = iroot(c, e)
     if k ** e == c:
         return k
     return None
 
 
-def fermat_factor(n, max_iter=200_000):
-    """Factor n when p and q are close. Early-exits as soon as the search
-    window grows beyond a plausible gap (2^32), so random far-apart primes
-    (where Fermat is hopeless) return fast instead of burning CPU."""
+def fermat_factor(n, max_iter=50_000):
+    """Factor n when p and q are close. For large n (>100 digits), caps the
+    search window to 1000 iterations since real Fermat factors have tiny gaps.
+    For small n, uses the full max_iter."""
     if n % 2 == 0:
         return 2, n // 2
     a0 = math.isqrt(n)
     a = a0 if a0 * a0 >= n else a0 + 1
-    for _ in range(max_iter):
-        if a - a0 > (1 << 32):
-            return None  # gap too big — Fermat is useless here
+    # For large n, the gap between p and q is tiny in practice
+    limit = min(max_iter, 1000) if n.bit_length() > 200 else max_iter
+    for _ in range(limit):
         b2 = a * a - n
         b = math.isqrt(b2)
         if b * b == b2:
