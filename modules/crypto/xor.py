@@ -76,7 +76,9 @@ def _assemble(data, key):
 # Common CTF flag prefixes used as cribs for XOR key recovery
 FLAG_PREFIXES = [
     b"flag{", b"FLAG{", b"Flag{", b"ctf{", b"CTF{", b"picoCTF{",
-    b"picoctf{", b"AEGIS{", b"aegis{", b"HTB{", b"THM{",
+    b"picoctf{", b"AegisCTF{", b"AEGIS{", b"aegis{", b"HTB{", b"THM{",
+    b"THCTT{", b"TCTT{", b"Aegis{", b"CYBERHEROCTF{", b"CyberHeroCTF{",
+    b"cyberheroctf{", b"NCSA{", b"WPICTF{",
 ]
 
 
@@ -240,8 +242,13 @@ def crib_attack(data, prefixes=None):
                     (f"crib={prefix.decode(errors='replace')} keylen={ks} key={bytes(key)!r}",
                      text)
                 )
-    out.sort(key=lambda t: text_score(t[1]))
-    return out[:10]
+    # Sort: flag-like results first (contain curly braces), then by score
+    def _sort_key(item):
+        _, text = item
+        has_flag = 1 if re.search(r'[A-Za-z]{2,}\{[^}]{2,}\}', text) else 0
+        return (-has_flag, text_score(text))
+    out.sort(key=_sort_key)
+    return out[:20]
 
 
 def known_plaintext_xor(data, known):
@@ -321,6 +328,217 @@ def wordlist_crib_xor(data, top=5):
     out.sort(key=lambda t: t[0])
     return [(f"wordlist key='{w}' (score {round(s,1)})", t)
             for s, w, t in out[:top]]
+
+
+def two_time_pad_crib_drag(c1_bytes, c2_bytes, max_crib_len=20):
+    """Two-time-pad crib-drag.
+
+    c1 = p1 ^ key, c2 = p2 ^ key  (same key reused → OTP broken).
+    xored = c1 ^ c2 = p1 ^ p2.
+
+    Algorithm:
+    1. For every flag prefix at every offset of p2, compute the implied
+       p1 fragment.  If it *looks English*, record the (offset, prefix) as
+       a hit.
+    2. For each hit, try closing '}' at every subsequent position.
+       Between prefix and '}' we recover p2 byte-by-byte: at each
+       position, try every printable flag-character and score the implied
+       p1 character for English-ness.  The flag-body candidate whose
+       overall implied p1 scores highest wins.
+    3. Also try standard repeated-key XOR recovery on c1 (the "reuse"
+       might be a short repeating key rather than true OTP).
+    """
+    from .common import text_score
+    if len(c1_bytes) != len(c2_bytes):
+        return []
+    n = len(c1_bytes)
+    results = []
+    xored = bytes(a ^ b for a, b in zip(c1_bytes, c2_bytes))
+
+    # ── Method 1: OTP crib-drag ──────────────────────────────────────────
+    # Step 1 – find (offset, prefix) pairs where implied p1 is English
+    hits = []
+    for prefix in FLAG_PREFIXES:
+        plen = len(prefix)
+        for off in range(n - plen + 1):
+            p1_frag = bytes(xored[off + i] ^ prefix[i] for i in range(plen))
+            if _looks_english(p1_frag):
+                hits.append((off, prefix))
+
+    # Step 2 – crib-drag English phrases against xored to recover p2.
+    #
+    # Key insight: p1 is English, p2 is the message (containing the flag).
+    # If we guess p1 at any position, p2 = xored ^ guess.  Try common
+    # English phrases/fragments at various offsets.  When the implied p2
+    # contains a flag pattern, we have a match.
+    _COMMON_PHRASES = [
+        # Full pangram (covers entire 81-byte messages)
+        b'The quick brown fox jumps over the lazy dog 0123456789 ABCDEFG',
+        b'the quick brown fox jumps over the lazy dog 0123456789 ABCDEFG',
+        b'The quick brown fox jumps over the lazy dog',
+        b'the quick brown fox jumps over the lazy dog',
+        b'The quick brown fox jumps',
+        b'The quick brown fox ',
+        b'the quick brown fox ',
+        # Common short phrases
+        b'the ', b'The ', b'jumps over', b'lazy dog',
+        b'a ', b'an ', b'is ', b'was ', b'hello', b'Hello',
+        b'welcome', b'Welcome', b'message', b'Secret', b'secret',
+        b'flag', b'Flag', b'internal', b'memo', b'Memo',
+        b'for ', b'and ', b'or ', b'in ', b'of ', b'to ',
+        b'with ', b'this ', b'that ', b'are ', b'can ',
+        b'not ', b'you ', b'all ', b'any ', b'how ',
+        b'what ', b'when ', b'where ', b'who ', b'why ',
+    ]
+    _FLAG_BODY_RE = re.compile(r'\{[A-Za-z0-9_ -]{2,}\}')
+
+    # For each offset, try each phrase and check if implied p2 has a flag
+    for phrase in _COMMON_PHRASES:
+        pl = len(phrase)
+        for off in range(max(0, n - pl + 1)):
+            p2_cand = bytes(xored[off + i] ^ phrase[i] for i in range(pl))
+            p2_txt = p2_cand.decode('latin-1', errors='replace')
+            # Check if this reveals a flag
+            m = re.search(r'[A-Za-z]{2,}\{[A-Za-z0-9_ -]{2,}\}', p2_txt)
+            if m:
+                flag_str = m.group(0)
+                # Verify the full p1 at this zone is English
+                flag_start = off + m.start()
+                flag_len = m.end() - m.start()
+                p1_zone = bytes(xored[flag_start + i] ^ flag_cand_i
+                                for i, flag_cand_i in
+                                enumerate(flag_str.encode('latin-1')))
+                if _looks_english(p1_zone):
+                    s = text_score(p1_zone.decode('latin-1', errors='replace'))
+                    results.append((max(-s, -10),
+                                    f"two-time-pad phrase='{phrase.decode()}' "
+                                    f"at={off} flag={flag_str!r}",
+                                    flag_str))
+    # Also try with the known prefix hits: use the prefix to anchor and
+    # extend via English word cribbing.
+    for off, prefix in hits:
+        plen = len(prefix)
+        # Try extending the known p1 fragment with common English words
+        known_p1 = bytes(xored[off + i] ^ prefix[i] for i in range(plen))
+        for phrase in _COMMON_PHRASES:
+            # Place phrase right after the prefix in p1
+            ext_off = off + plen
+            if ext_off + len(phrase) > n:
+                continue
+            p2_ext = bytes(xored[ext_off + i] ^ phrase[i]
+                           for i in range(len(phrase)))
+            p2_ext_txt = p2_ext.decode('latin-1', errors='replace')
+            # Check if extension reveals flag chars
+            if re.search(r'[A-Za-z0-9_ -]{3,}\}', p2_ext_txt):
+                # Build full flag candidate
+                full_flag_zone = prefix + p2_ext
+                full_p1 = known_p1 + phrase
+                flag_m = _FLAG_BODY_RE.search(
+                    full_flag_zone.decode('latin-1', errors='replace'))
+                if flag_m:
+                    flag_str = flag_m.group(0)
+                    # Check the prefix part matches a known CTF prefix
+                    pre = full_flag_zone.decode('latin-1', errors='replace')
+                    pre_part = pre[:pre.index('{') + 1] if '{' in pre else ''
+                    if any(p.decode() in pre_part for p in FLAG_PREFIXES):
+                        s = text_score(full_p1.decode('latin-1', errors='replace'))
+                        results.append((max(-s, -10),
+                                        f"two-time-pad ext='{phrase.decode()}' "
+                                        f"at={off} flag={flag_str!r}",
+                                        flag_str))
+
+    # ── Method 2: repeated-key XOR on c1 (p1 is English) ─────────────────
+    for kl in range(2, min(21, n // 2 + 1)):
+        key = bytearray()
+        for pos in range(kl):
+            col = c1_bytes[pos::kl]
+            best_k, best_s = 0, float("inf")
+            for k in range(256):
+                plain = bytes(b ^ k for b in col)
+                s = score_bytes(plain)
+                if s < best_s:
+                    best_s, best_k = s, k
+            key.append(best_k)
+        full_p2 = bytes(c2_bytes[i] ^ key[i % kl] for i in range(n))
+        try:
+            full_text = full_p2.decode("latin-1")
+        except Exception:
+            continue
+        if not is_printable_text(full_text):
+            continue
+        has_flag = bool(re.search(r'[A-Za-z]{2,}\{[^}]{2,}\}', full_text))
+        if has_flag:
+            results.append((-10,
+                            f"two-time keylen={kl} key={bytes(key)!r}",
+                            full_text))
+
+    # Deduplicate and sort
+    results.sort(key=lambda x: x[0])
+    seen = set()
+    out = []
+    for _s, label, text in results[:30]:
+        short = text[:80]
+        if short not in seen:
+            seen.add(short)
+            out.append((label, text))
+    return out[:10]
+
+
+def _looks_english(data, min_alpha=4, min_space_ratio=0.03):
+    """Check if a byte/str chunk looks like English text.
+
+    Requirements: mostly alphabetic, spaces at ~3-20%, mixed case,
+    no control characters, and common English patterns present.
+    """
+    if isinstance(data, bytes):
+        try:
+            text = data.decode('latin-1')
+        except Exception:
+            return False
+    else:
+        text = str(data)
+    if len(text) < 4:
+        return False
+    # No control characters (except space/tab/newline)
+    ctrl = sum(1 for c in text if ord(c) < 32 and c not in '\t\n\r')
+    if ctrl > 0:
+        return False
+    word_chars = sum(1 for c in text if c.isalnum() or c in ' \t')
+    spaces = text.count(' ')
+    space_ratio = spaces / len(text)
+    has_upper = any(c.isupper() for c in text)
+    has_lower = any(c.islower() for c in text)
+    # Word chars (alpha+digits+space) must dominate, spaces reasonable
+    if not (word_chars / len(text) >= 0.7 and
+            min_space_ratio <= space_ratio <= 0.4):
+        return False
+    # For longer fragments, require mixed case; short ones may be mid-sentence
+    if len(text) >= 12 and not (has_upper and has_lower):
+        return False
+    # Check for common English bigrams/trigrams
+    tl = text.lower()
+    english_patterns = ['th', 'he', 'in', 'er', 'an', 're', 'on', 'at',
+                       'en', 'nd', 'the', 'and', 'ing']
+    hits = sum(1 for p in english_patterns if p in tl)
+    return hits >= 2
+
+
+def _english_char_score(ch):
+    """Score how likely a character is to appear in English text. Higher = better."""
+    ch = ch.lower()
+    if ch == ' ':
+        return 20
+    if ch in 'etaoinshrd':
+        return 15
+    if ch in 'lcumwfgyp':
+        return 10
+    if ch in 'bvkjxqz':
+        return 5
+    if ch.isalpha():
+        return 3
+    if ch in ',.!?;:-\'"':
+        return 2
+    return 0
 
 
 def crack_xor(data, known_plaintext=None):

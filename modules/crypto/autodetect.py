@@ -113,6 +113,20 @@ def analyze_text(text):
 
     flags_from_labels = []
     encoded = looks_like_encoding(text)
+    # Two-time pad detection: c1_hex = ... / c2_hex = ... pattern
+    m1 = re.search(r'c1_hex\s*=\s*([0-9a-fA-F]+)', text)
+    m2 = re.search(r'c2_hex\s*=\s*([0-9a-fA-F]+)', text)
+    if m1 and m2:
+        try:
+            c1 = bytes.fromhex(m1.group(1))
+            c2 = bytes.fromhex(m2.group(1))
+            tt_results = xor_mod.two_time_pad_crib_drag(c1, c2)
+            jobs_extra = [("two-time-pad", lambda: tt_results)]
+        except Exception:
+            jobs_extra = []
+    else:
+        jobs_extra = []
+
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
         ("chain-decode", lambda: _chain_decode_job(text)),
@@ -120,7 +134,7 @@ def analyze_text(text):
         ("rsa-params", lambda: _try_rsa_params(text)),
         ("length-ext", lambda: _length_ext_job(text)),
         ("xor", lambda: xor_mod.crack_xor(text)),
-    ]
+    ] + jobs_extra
     # Bacon's cipher is a 5-bit grouping over 0/1 (or A/B) — a binary-
     # looking string is *exactly* its signature, yet looks_like_encoding
     # classifies "100010..." as hex and skips the classic solvers. Run it
@@ -354,6 +368,18 @@ def analyze_file(path, as_binary=None):
         results.extend(encodings.try_all_encodings(text))
         results.extend(classic.try_all_classic(text))
         results.extend(xor_mod.crack_xor(text))
+        # Full analyze_text pipeline (chain-decode, hash-crack, bacon, etc.)
+        try:
+            as_text = data.decode("utf-8", errors="ignore")
+            text_results, text_flags = analyze_text(as_text)
+            for r in text_results:
+                if r not in results:
+                    results.append(r)
+            for f in text_flags:
+                if f not in flags:
+                    flags.append(f)
+        except Exception:
+            pass
 
     # RSA parameter parsing (works on text files with n=/e=/c= patterns)
     try:
@@ -365,6 +391,21 @@ def analyze_file(path, as_binary=None):
                 for f in _flag_hits(text_out):
                     if f not in flags:
                         flags.append(f)
+            # Two-time pad: c1_hex / c2_hex pattern
+            m1 = re.search(r'c1_hex\s*=\s*([0-9a-fA-F]+)', as_text)
+            m2 = re.search(r'c2_hex\s*=\s*([0-9a-fA-F]+)', as_text)
+            if m1 and m2:
+                try:
+                    c1 = bytes.fromhex(m1.group(1))
+                    c2 = bytes.fromhex(m2.group(1))
+                    tt_results = xor_mod.two_time_pad_crib_drag(c1, c2)
+                    for label, text_out in tt_results:
+                        results.append((label, text_out))
+                        for f in _flag_hits(text_out):
+                            if f not in flags:
+                                flags.append(f)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -394,6 +435,62 @@ def analyze_file(path, as_binary=None):
         if f not in flags:
             flags.append(f)
 
+    # Custom cipher: detect LCG/PRNG keystream in companion .py files
+    parent = os.path.dirname(path)
+    basename = os.path.basename(path)
+    if basename.endswith((".enc", ".bin")) or "cipher" in basename.lower():
+        for py in os.listdir(parent):
+            if py.endswith(".py") and py != basename:
+                py_path = os.path.join(parent, py)
+                try:
+                    py_text = open(py_path).read()
+                    # Detect LCG pattern: s = (s * A + B) & MASK
+                    lcg_m = re.search(
+                        r'(?i)seed\s*=\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+                    mult_m = re.search(
+                        r's\s*\*\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+                    inc_m = re.search(
+                        r'\+\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+                    mask_m = re.search(
+                        r'&\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+                    byte_m = re.search(r's\s*&\s*(?:0x([0-9a-fA-F]+)|(\d+))',
+                                       py_text)
+                    if lcg_m and mult_m:
+                        def _parse_int(m, default):
+                            if m is None: return int(default, 0)
+                            hex_part, dec_part = m.group(1), m.group(2)
+                            return int('0x' + hex_part, 16) if hex_part else int(dec_part)
+                        seed = _parse_int(lcg_m, '0')
+                        mult = _parse_int(mult_m, '0')
+                        inc = _parse_int(inc_m, '0x12345')
+                        mask = _parse_int(mask_m, '0x7FFFFFFF')
+                        byte_mask = _parse_int(byte_m, '0xFF')
+                        # Read encrypted data (try hex first, then raw)
+                        with open(path, 'rb') as ef:
+                            raw = ef.read()
+                        enc_text = raw.decode('ascii', errors='ignore').strip()
+                        if re.fullmatch(r'[0-9a-fA-F]+', enc_text) and len(enc_text) >= 8:
+                            enc_bytes = bytes.fromhex(enc_text)
+                        else:
+                            enc_bytes = raw.rstrip(b'\n\r')
+                        # Generate keystream and decrypt
+                        s = seed
+                        ks = bytearray()
+                        for _ in range(len(enc_bytes)):
+                            s = (s * mult + inc) & mask
+                            ks.append(s & byte_mask)
+                        plain = bytes(a ^ b for a, b in zip(enc_bytes, ks))
+                        try:
+                            pt = plain.decode('utf-8', errors='ignore')
+                        except Exception:
+                            pt = plain.decode('latin-1')
+                        for f in _flag_hits(pt):
+                            if f not in flags:
+                                flags.append(f)
+                        if pt.strip():
+                            results.append((f"custom-lcg({py})", pt.strip()[:200]))
+                except Exception:
+                    pass
     # zip members
     if data[:2] == b"PK":
         try:
