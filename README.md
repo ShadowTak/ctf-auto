@@ -124,7 +124,7 @@ python3 run.py --auto-lab all --limit 3   # จำกัดจำนวนแล
 
 ## 🔍 ตอนนี้แก้อะไรได้บ้าง (สรุปความสามารถ)
 
-### 🎯 ภาพรวม: แลปเทสจริง 22/22 ผ่าน (Web 14/14 + Crypto 8/8)
+### 🎯 ภาพรวม: แลปเทสจริง Web 14/14 + Crypto 14/14 disk-tested ผ่าน
 
 ### 🌐 Web — 14 เทคนิคสแกน/เจาะอัตโนมัติ
 
@@ -152,11 +152,11 @@ python3 run.py --auto-lab all --limit 3   # จำกัดจำนวนแล
 | **Encoding** | base16/32/45/58/62/64/85, hex, binary, octal, decimal, morse, brainfuck, Ook!, Malbolge, ROT13/47, leet, gzip/zlib, custom-alphabet (Thai `ก-ฮ+๐-๙+0-9`, emoji base-100), base62 case-recovery (Bad62) |
 | **Chain ซ้อนหลายชั้น** | beam-search แตกทุกเส้นทาง — `base64(binary(hex))`, `b64(rot13(b64))`, `base85→base45→Malbolge` (TCTT 2025) — เก็บ flag จากทุกชั้น |
 | **Classic cipher** | Caesar, Vigenere (auto-key: sweep + flag-prefix crib + per-char), Affine, Atbash, Railfence, Bacon (0/1), Playfair, Hill, Columnar, substitution (quadgram annealing) |
-| **RSA** | auto-detect ไฟล์ n/e/c → small-e (cube root), Wiener (small d), Fermat (ใกล้กัน), PEM/DER parser, integer-only iroot |
-| **XOR** | single-byte brute, repeating-key (Kasiski + annealing), flag-prefix crib, wordlist-key crib (THCTT) |
+| **RSA** | auto-detect ไฟล์ n/e/c → small-e (cube root), Wiener (small d), Fermat (ใกล้กัน), **shared-prime** (gcd สองตัวเลข), PEM/DER parser, integer-only iroot |
+| **XOR** | single-byte brute, repeating-key (Kasiski + annealing), flag-prefix crib, wordlist-key crib (THCTT), **two-time-pad crib-drag** (OTP reuse — phrase-based, auto-recover key) |
 | **Hash** | identify (md5/sha1/sha256/...), wordlist crack + mutation, flag-template ต่อเอง (`redactedCTF{<password>}` → `redactedCTF{chocolate}`) |
 | **Modern** | AES (ECB/CBC), ChaCha20, RC4, MT19937 — solver + test vectors ในตัว |
-| **อื่นๆ** | **SHA-256 length extension** (forge MAC จาก (msg, mac) คู่เดียว), payload หลัง label (`cipher:`/`cipher_hex:`) |
+| **อื่นๆ** | **SHA-256 length extension** (forge MAC จาก (msg, mac) คู่เดียว), **KLG3 ledger solver** (SHA-256 + Base85 + XOR position-bound), **LCG custom cipher** (auto-detect + decrypt), payload หลัง label (`cipher:`/`cipher_hex:`) |
 
 ### 🌍 Network / Forensics
 
@@ -200,11 +200,24 @@ python3 run_web_test.py          # รัน test server ใน thread + web sca
 python3 run_chain_test.py        # ทดสอบ auto chain network -> web
 ```
 
-## ผลลัพธ์จากการเทสกับแลปจริง (redacted stack)
+## ผลลัพธ์จากการเทสกับแลปจริง
 
-**Crypto: 8/8 ผ่าน** — rsa-small-e, bacon-cipher, vigenere-basic, base64-trap,
-hash-crack (`redactedCTF{chocolate}`), single-byte-xor, aes-ctr-bitflip
-(bit-flip attack อัตโนมัติ), hash-length-extension (forge MAC สำเร็จ)
+**Crypto: 14/14 ผ่าน (disk-tested)**
+- rsa-small-e (`redactedCTF{small_e_cube_root_strikes_again}`)
+- rsa-wiener (`redactedCTF{wiener_attack_small_d}`)
+- rsa-mistake / shared-prime (`redactedCTF{shared_prime_is_a_fatal_flaw}`)
+- bacon-cipher (`scriptCTF{notwhatitseems}`)
+- vigenere-basic (`redactedCTF{vigenere_is_just_caesar_plus_key}`)
+- base64-trap (`redactedCTF{base64_is_not_encryption}`)
+- hash-crack (`redactedCTF{chocolate}`)
+- single-byte-xor (`redactedCTF{single_byte_xor_bruteforce}`)
+- repeating-xor (`redactedCTF{known_plaintext_beats_xor}`)
+- xor-reuse / two-time-pad (`redactedCTF{xor_key_reuse_crib_drag}`)
+- custom-cipher / LCG (`redactedCTF{lcg_keystream_is_weak}`)
+- brainfuck (`redactedCTF{brainfuck_esoteric_joy}`)
+- crypto-ledger-quorum / KLG3 (`redactedCTF{ledger_quorum_rejects_the_pretty_decoy}`)
+- xored-flag (`redactedCTF{read_the_checker_trace_the_xor}`)
+- hash-length-extension (forge MAC สำเร็จ, flag อยู่ฝั่ง server)
 
 **Web: 14/14 ผ่าน** — idor-101, file-upload-basic, cookie-manipulation,
 path-traversal, graphql-introspection, command-injection-basic, mass-assignment,
