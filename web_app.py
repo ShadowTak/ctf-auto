@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""CTF Auto Recon — Web UI.
+
+    python3 web_app.py                # start on http://localhost:8088
+    python3 web_app.py --port 9000    # custom port
+"""
+import os
+import sys
+import json
+import time
+import tempfile
+import threading
+import argparse
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from flask import Flask, request, jsonify, render_template, send_from_directory
+
+app = Flask(__name__, template_folder="templates", static_folder="static")
+
+# ── in-memory job store ───────────────────────────────────────────────────────
+_jobs = {}   # job_id → {status, results, started, finished, error}
+_lock = threading.Lock()
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _is_clean_flag(f):
+    """Check if a flag string looks like a real CTF flag (not garbage)."""
+    if not f or len(f) < 6 or len(f) > 80:
+        return False
+    if '{' not in f or '}' not in f:
+        return False
+    body = f.split('{', 1)[1].rstrip('}')
+    if not body:
+        return False
+    # Strict whitelist: only letters, digits, underscores, hyphens, spaces
+    # Reject anything with =, ], [, $, ~, @, |, ), (, ^, &, comma, backslash, etc.
+    allowed = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ -')
+    for c in body:
+        if c not in allowed:
+            return False
+    # No control chars or high-bit chars
+    if any(ord(c) < 32 or ord(c) > 126 for c in body):
+        return False
+    return True
+
+
+def _new_job():
+    import uuid
+    jid = uuid.uuid4().hex[:12]
+    with _lock:
+        _jobs[jid] = {"status": "running", "results": [], "started": time.time(),
+                       "finished": None, "error": None}
+    return jid
+
+
+def _finish_job(jid, results, error=None):
+    with _lock:
+        if jid in _jobs:
+            _jobs[jid]["status"] = "error" if error else "done"
+            _jobs[jid]["results"] = results
+            _jobs[jid]["finished"] = time.time()
+            _jobs[jid]["error"] = error
+
+
+# ── Crypto ───────────────────────────────────────────────────────────────────
+
+def _run_crypto(jid, text=None, filepath=None):
+    try:
+        from modules.crypto.autodetect import run_crypto, analyze_text
+        results = []
+        if text:
+            text_ranked, text_flags = analyze_text(text)
+            results.append({"type": "text-input", "input": text[:200]})
+            for r in (text_ranked or []):
+                if isinstance(r, (list, tuple)):
+                    score = r[0] if len(r) > 0 else 0
+                    label = r[1] if len(r) > 1 else ""
+                    out = r[2] if len(r) > 2 else ""
+                    results.append({"type": "decode", "method": str(label),
+                                    "score": round(float(score), 2), "output": str(out)[:500]})
+            for f in (text_flags or []):
+                if f and f not in [r.get('flag') for r in results if r.get('type') == 'flag']:
+                    # Filter garbage flags: must have {}, reasonable length, mostly printable
+                    if _is_clean_flag(f):
+                        results.append({"type": "flag", "flag": f})
+        if filepath:
+            flags = run_crypto(filepath)
+            for f in (flags or []):
+                results.append({"type": "flag", "flag": f})
+            results.append({"type": "file", "path": os.path.basename(filepath)})
+        _finish_job(jid, results)
+    except Exception as e:
+        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+
+# ── Web ───────────────────────────────────────────────────────────────────────
+
+def _run_web(jid, url):
+    try:
+        from modules.web.scanner import run_web
+        results = []
+        results.append({"type": "target", "url": url})
+        output = run_web(url, interactive=False)
+        if isinstance(output, dict):
+            for k, v in output.items():
+                results.append({"type": "scan", "section": k,
+                                "data": str(v)[:1000] if not isinstance(v, list) else
+                                json.dumps(v[:50])[:1000]})
+        elif isinstance(output, list):
+            for item in output:
+                results.append({"type": "scan", "data": str(item)[:500]})
+        else:
+            results.append({"type": "scan", "data": str(output)[:2000]})
+        _finish_job(jid, results)
+    except Exception as e:
+        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+
+# ── Network ───────────────────────────────────────────────────────────────────
+
+def _run_network(jid, filepath):
+    try:
+        from modules.network import pcap_analyzer
+        results = []
+        results.append({"type": "file", "path": os.path.basename(filepath)})
+        parsed = pcap_analyzer.analyze(filepath)
+        if isinstance(parsed, dict):
+            for k, v in parsed.items():
+                results.append({"type": "network", "section": k,
+                                "data": str(v)[:1000] if not isinstance(v, list) else
+                                json.dumps(v[:50])[:1000]})
+        elif isinstance(parsed, list):
+            for item in parsed:
+                results.append({"type": "network", "data": str(item)[:500]})
+        else:
+            results.append({"type": "network", "data": str(parsed)[:2000]})
+        _finish_job(jid, results)
+    except Exception as e:
+        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/scan", methods=["POST"])
+def api_scan():
+    data = request.json or {}
+    category = data.get("category", "")
+    jid = _new_job()
+
+    if category == "crypto":
+        text = data.get("text", "").strip()
+        filepath = None
+        # If a file was uploaded previously, it's in /tmp
+        file_path = data.get("file_path")
+        if file_path and os.path.exists(file_path):
+            filepath = file_path
+        if not text and not filepath:
+            _finish_job(jid, [], error="No text or file provided")
+            return jsonify({"job_id": jid})
+        t = threading.Thread(target=_run_crypto, args=(jid,), kwargs={"text": text or None, "filepath": filepath}, daemon=True)
+        t.start()
+
+    elif category == "web":
+        url = data.get("url", "").strip()
+        if not url:
+            _finish_job(jid, [], error="No URL provided")
+            return jsonify({"job_id": jid})
+        if not url.startswith("http"):
+            url = "https://" + url
+        t = threading.Thread(target=_run_web, args=(jid, url), daemon=True)
+        t.start()
+
+    elif category == "network":
+        file_path = data.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            _finish_job(jid, [], error="No file uploaded")
+            return jsonify({"job_id": jid})
+        t = threading.Thread(target=_run_network, args=(jid, file_path), daemon=True)
+        t.start()
+
+    else:
+        _finish_job(jid, [], error=f"Unknown category: {category}")
+        return jsonify({"job_id": jid})
+
+    return jsonify({"job_id": jid})
+
+
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    tmp = os.path.join(tempfile.gettempdir(), f"ctfweb_{f.filename}")
+    f.save(tmp)
+    return jsonify({"file_path": tmp, "filename": f.filename})
+
+
+@app.route("/api/status/<jid>")
+def api_status(jid):
+    with _lock:
+        job = _jobs.get(jid)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    elapsed = time.time() - job["started"]
+    return jsonify({
+        "status": job["status"],
+        "results": job["results"],
+        "error": job["error"],
+        "elapsed": round(elapsed, 1),
+    })
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CTF Auto Web UI")
+    parser.add_argument("--port", type=int, default=8088)
+    parser.add_argument("--host", default="0.0.0.0")
+    args = parser.parse_args()
+
+    print(f"\n  🚩 CTF Auto — Web UI")
+    print(f"  http://localhost:{args.port}\n")
+    app.run(host=args.host, port=args.port, debug=False)

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CTF Auto Recon</title>
+<style>
+/* ── Reset & Base ──────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2235;--bg4:#222d44;
+  --border:#2a3650;--border2:#3a4a6a;
+  --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
+  --accent:#3b82f6;--accent2:#60a5fa;--accent-glow:rgba(59,130,246,.15);
+  --green:#10b981;--green-bg:rgba(16,185,129,.12);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.12);
+  --yellow:#f59e0b;--yellow-bg:rgba(245,158,11,.12);
+  --purple:#a855f7;--purple-bg:rgba(168,85,247,.12);
+  --radius:12px;--radius-sm:8px;
+  --shadow:0 4px 24px rgba(0,0,0,.4);
+  --font:'SF Mono','JetBrains Mono','Fira Code',monospace;
+  --font-sans:-apple-system,'Inter',system-ui,sans-serif;
+}
+html{font-size:15px}
+body{
+  font-family:var(--font-sans);background:var(--bg);color:var(--text);
+  min-height:100vh;overflow-x:hidden;
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% -20%,rgba(59,130,246,.08),transparent),
+    radial-gradient(ellipse 60% 50% at 80% 100%,rgba(168,85,247,.06),transparent);
+}
+
+/* ── Layout ────────────────────────────────────────────────────── */
+.container{max-width:960px;margin:0 auto;padding:24px 20px 60px}
+header{text-align:center;padding:48px 0 32px}
+header h1{
+  font-size:2.4rem;font-weight:800;letter-spacing:-.03em;
+  background:linear-gradient(135deg,var(--accent2),var(--purple));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+header p{color:var(--text2);margin-top:8px;font-size:.95rem}
+
+/* ── Tabs ──────────────────────────────────────────────────────── */
+.tabs{
+  display:flex;gap:4px;background:var(--bg2);border-radius:var(--radius);
+  padding:4px;margin-bottom:28px;border:1px solid var(--border);
+}
+.tab{
+  flex:1;padding:14px 16px;text-align:center;cursor:pointer;
+  border-radius:var(--radius-sm);font-weight:600;font-size:.92rem;
+  color:var(--text3);transition:all .2s;border:1px solid transparent;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  user-select:none;
+}
+.tab:hover{color:var(--text);background:var(--bg3)}
+.tab.active{
+  background:var(--bg4);color:var(--text);
+  border-color:var(--border2);box-shadow:var(--shadow);
+}
+.tab .icon{font-size:1.2rem}
+
+/* ── Panel ─────────────────────────────────────────────────────── */
+.panel{
+  display:none;background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:28px;animation:fadeIn .25s ease;
+}
+.panel.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.panel-title{
+  font-size:1.15rem;font-weight:700;margin-bottom:20px;
+  display:flex;align-items:center;gap:10px;
+}
+.panel-title .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.dot-web{background:var(--accent)}
+.dot-crypto{background:var(--purple)}
+.dot-net{background:var(--green)}
+
+/* ── Inputs ────────────────────────────────────────────────────── */
+.input-group{margin-bottom:18px}
+.input-group label{
+  display:block;font-size:.82rem;font-weight:600;color:var(--text2);
+  margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;
+}
+.input-row{display:flex;gap:10px;align-items:stretch}
+input[type="text"],input[type="url"],textarea{
+  width:100%;padding:13px 16px;border-radius:var(--radius-sm);
+  border:1px solid var(--border);background:var(--bg);color:var(--text);
+  font-family:var(--font);font-size:.9rem;transition:border .2s;
+  outline:none;
+}
+input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+textarea{resize:vertical;min-height:100px}
+input::placeholder,textarea::placeholder{color:var(--text3)}
+
+/* ── File Drop ─────────────────────────────────────────────────── */
+.file-drop{
+  border:2px dashed var(--border);border-radius:var(--radius);
+  padding:36px 20px;text-align:center;cursor:pointer;
+  transition:all .2s;color:var(--text3);position:relative;
+}
+.file-drop:hover,.file-drop.drag-over{
+  border-color:var(--accent);background:var(--accent-glow);color:var(--text2);
+}
+.file-drop input[type="file"]{
+  position:absolute;inset:0;opacity:0;cursor:pointer;
+}
+.file-drop .icon{font-size:2rem;margin-bottom:8px;display:block}
+.file-drop .name{color:var(--accent2);font-weight:600;margin-top:8px;font-size:.9rem}
+
+/* ── Button ────────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:13px 28px;border-radius:var(--radius-sm);border:none;
+  font-weight:700;font-size:.95rem;cursor:pointer;transition:all .2s;
+  font-family:var(--font-sans);
+}
+.btn-primary{
+  background:linear-gradient(135deg,var(--accent),#2563eb);color:#fff;
+  box-shadow:0 2px 12px rgba(59,130,246,.3);
+}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(59,130,246,.4)}
+.btn-primary:active{transform:translateY(0)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn-sm{padding:10px 20px;font-size:.85rem}
+
+/* ── Results ───────────────────────────────────────────────────── */
+#results{
+  margin-top:28px;display:none;
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--radius);overflow:hidden;animation:fadeIn .3s ease;
+}
+#results.show{display:block}
+.results-header{
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.results-header h3{font-size:1rem;font-weight:700;display:flex;align-items:center;gap:8px}
+.results-header .elapsed{color:var(--text3);font-size:.82rem;font-family:var(--font)}
+.results-body{padding:0;max-height:500px;overflow-y:auto}
+.results-body::-webkit-scrollbar{width:6px}
+.results-body::-webkit-scrollbar-track{background:transparent}
+.results-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── Result Items ──────────────────────────────────────────────── */
+.r-item{
+  padding:14px 20px;border-bottom:1px solid var(--border);
+  transition:background .15s;
+}
+.r-item:last-child{border-bottom:none}
+.r-item:hover{background:rgba(255,255,255,.02)}
+.r-item .label{
+  font-size:.75rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.04em;margin-bottom:6px;display:flex;align-items:center;gap:6px;
+}
+.r-item .label .badge{
+  display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7rem;
+}
+.badge-flag{background:var(--green-bg);color:var(--green)}
+.badge-decode{background:var(--purple-bg);color:var(--purple)}
+.badge-scan{background:var(--accent-glow);color:var(--accent2)}
+.badge-net{background:var(--yellow-bg);color:var(--yellow)}
+.badge-target{background:var(--bg4);color:var(--text2)}
+.badge-file{background:var(--bg4);color:var(--text2)}
+.badge-error{background:var(--red-bg);color:var(--red)}
+.r-item .value{
+  font-family:var(--font);font-size:.85rem;color:var(--text);
+  word-break:break-all;line-height:1.6;
+}
+.r-item .value .score{
+  display:inline-block;background:var(--bg4);padding:2px 8px;
+  border-radius:4px;font-size:.75rem;color:var(--text2);margin-right:8px;
+}
+.r-item .value .method{color:var(--accent2);font-weight:600}
+
+/* ── Flag highlight ────────────────────────────────────────────── */
+.flag-found{
+  background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(16,185,129,.05));
+  border-left:3px solid var(--green);
+}
+.flag-found .value{color:var(--green);font-weight:600;font-size:.95rem}
+
+/* ── Loading ───────────────────────────────────────────────────── */
+.spinner{
+  display:inline-block;width:18px;height:18px;border:2px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{color:var(--text2);font-size:.9rem;display:flex;align-items:center;gap:10px}
+
+/* ── Empty state ───────────────────────────────────────────────── */
+.empty{text-align:center;padding:48px 20px;color:var(--text3)}
+.empty .icon{font-size:3rem;margin-bottom:12px;display:block}
+
+/* ── Summary bar ───────────────────────────────────────────────── */
+.summary{
+  display:flex;gap:12px;padding:14px 20px;border-top:1px solid var(--border);
+  flex-wrap:wrap;
+}
+.summary .stat{
+  display:flex;align-items:center;gap:6px;font-size:.82rem;font-weight:600;
+}
+.summary .stat .num{
+  width:22px;height:22px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:.75rem;font-weight:700;
+}
+.stat-flags .num{background:var(--green-bg);color:var(--green)}
+.stat-decodes .num{background:var(--purple-bg);color:var(--purple)}
+.stat-warnings .num{background:var(--yellow-bg);color:var(--yellow)}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media(max-width:640px){
+  header h1{font-size:1.8rem}
+  .tabs{flex-direction:column}
+  .tab{padding:12px}
+  .input-row{flex-direction:column}
+  .panel{padding:20px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🚩 CTF Auto Recon</h1>
+    <p>Auto-scan · Auto-decode · Auto-crack — Web / Crypto / Network</p>
+  </header>
+
+  <!-- ── Tabs ──────────────────────────────────────────────── -->
+  <div class="tabs">
+    <div class="tab active" data-tab="web" onclick="switchTab('web')">
+      <span class="icon">🌐</span> Web
+    </div>
+    <div class="tab" data-tab="crypto" onclick="switchTab('crypto')">
+      <span class="icon">🔐</span> Crypto
+    </div>
+    <div class="tab" data-tab="network" onclick="switchTab('network')">
+      <span class="icon">🌍</span> Network
+    </div>
+  </div>
+
+  <!-- ── Web Panel ─────────────────────────────────────────── -->
+  <div class="panel active" id="panel-web">
+    <div class="panel-title"><span class="dot dot-web"></span> Web Auto Scan</div>
+    <div class="input-group">
+      <label>Target URL</label>
+      <div class="input-row">
+        <input type="url" id="web-url" placeholder="https://target.ctf.com or http://10.10.10.1:8080">
+        <button class="btn btn-primary" onclick="runScan('web')">▶ Scan</button>
+      </div>
+    </div>
+    <p style="color:var(--text3);font-size:.82rem;margin-top:-8px">
+      Auto-detects: recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, GraphQL, JWT, cookie forge, AES-CTR bit-flip, login brute, backup leak, flag scan
+    </p>
+  </div>
+
+  <!-- ── Crypto Panel ──────────────────────────────────────── -->
+  <div class="panel" id="panel-crypto">
+    <div class="panel-title"><span class="dot dot-crypto"></span> Crypto Auto Decode</div>
+    <div class="input-group">
+      <label>Text / Ciphertext</label>
+      <textarea id="crypto-text" placeholder="Paste ciphertext, hash, RSA params, encoded string...&#10;&#10;Examples:&#10;  n = 12345...&#10;  e = 65537&#10;  c = 99999...&#10;&#10;  VVZkV2JtRllUa1JX...&#10;&#10;  cipher_hex: 0327252b31...&#10;&#10;  10001000101000001..."></textarea>
+    </div>
+    <div class="input-group">
+      <label>Or upload file</label>
+      <div class="file-drop" id="crypto-drop">
+        <input type="file" id="crypto-file" onchange="handleFile(this,'crypto')">
+        <span class="icon">📁</span>
+        <span>Drop file here or click to browse</span>
+        <span class="name" id="crypto-filename"></span>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <button class="btn btn-primary" onclick="runScan('crypto')">▶ Decode</button>
+    </div>
+    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
+      Auto-detects: base64/32/85, hex, binary, ROT13/47, Caesar, Vigenère, Affine, Atbash, Bacon, RSA (small-e/Wiener/Fermat/shared-prime), XOR, hash crack, chain decode, length extension, brainfuck, Morse, LCG custom cipher
+    </p>
+  </div>
+
+  <!-- ── Network Panel ─────────────────────────────────────── -->
+  <div class="panel" id="panel-network">
+    <div class="panel-title"><span class="dot dot-net"></span> Network Auto Analyze</div>
+    <div class="input-group">
+      <label>Upload pcap / pcapng file</label>
+      <div class="file-drop" id="net-drop">
+        <input type="file" id="net-file" onchange="handleFile(this,'network')" accept=".pcap,.pcapng,.cap">
+        <span class="icon">📦</span>
+        <span>Drop .pcap / .pcapng file here or click to browse</span>
+        <span class="name" id="net-filename"></span>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <button class="btn btn-primary" onclick="runScan('network')">▶ Analyze</button>
+    </div>
+    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
+      Auto-detects: TCP reassembly, HTTP extraction, flag in UDP/ICMP exfil, DNS records, port scan results, banner grabbing
+    </p>
+  </div>
+
+  <!-- ── Results ───────────────────────────────────────────── -->
+  <div id="results">
+    <div class="results-header">
+      <h3><span class="spinner" id="spinner"></span> <span id="results-title">Results</span></h3>
+      <span class="elapsed" id="elapsed"></span>
+    </div>
+    <div class="results-body" id="results-body"></div>
+    <div class="summary" id="summary"></div>
+  </div>
+</div>
+
+<script>
+/* ── State ─────────────────────────────────────────────────── */
+let currentTab = 'web';
+let uploadedFiles = {};
+let polling = null;
+
+/* ── Tab switching ─────────────────────────────────────────── */
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + tab).classList.add('active');
+  // Reset results
+  document.getElementById('results').classList.remove('show');
+}
+
+/* ── File handling ─────────────────────────────────────────── */
+function handleFile(input, category) {
+  const file = input.files[0];
+  if (!file) return;
+  const nameEl = document.getElementById(category === 'crypto' ? 'crypto-filename' : 'net-filename');
+  nameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+
+  // Upload to server
+  const fd = new FormData();
+  fd.append('file', file);
+  fetch('/api/upload', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => { uploadedFiles[category] = d.file_path; })
+    .catch(e => { nameEl.textContent = 'Upload failed: ' + e; });
+}
+
+/* ── Drag & drop ───────────────────────────────────────────── */
+document.querySelectorAll('.file-drop').forEach(el => {
+  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+  el.addEventListener('drop', e => {
+    e.preventDefault(); el.classList.remove('drag-over');
+    const input = el.querySelector('input[type="file"]');
+    input.files = e.dataTransfer.files;
+    input.dispatchEvent(new Event('change'));
+  });
+});
+
+/* ── Run scan ──────────────────────────────────────────────── */
+function runScan(category) {
+  const body = { category };
+
+  if (category === 'web') {
+    body.url = document.getElementById('web-url').value.trim();
+    if (!body.url) return alert('Enter a URL');
+  } else if (category === 'crypto') {
+    body.text = document.getElementById('crypto-text').value.trim();
+    if (uploadedFiles.crypto) body.file_path = uploadedFiles.crypto;
+    if (!body.text && !body.file_path) return alert('Enter text or upload a file');
+  } else if (category === 'network') {
+    if (!uploadedFiles.network) return alert('Upload a pcap file');
+    body.file_path = uploadedFiles.network;
+  }
+
+  // Show results panel
+  const resultsEl = document.getElementById('results');
+  resultsEl.classList.add('show');
+  document.getElementById('results-body').innerHTML = '<div class="empty"><div class="loading-text"><span class="spinner"></span> Scanning...</div></div>';
+  document.getElementById('results-title').textContent = 'Scanning...';
+  document.getElementById('elapsed').textContent = '';
+  document.getElementById('summary').innerHTML = '';
+
+  fetch('/api/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  .then(r => r.json())
+  .then(d => { if (d.job_id) pollJob(d.job_id); })
+  .catch(e => {
+    document.getElementById('results-body').innerHTML =
+      '<div class="r-item"><div class="label"><span class="badge badge-error">ERROR</span></div><div class="value">' + e + '</div></div>';
+  });
+}
+
+/* ── Poll job status ───────────────────────────────────────── */
+function pollJob(jid) {
+  if (polling) clearInterval(polling);
+  polling = setInterval(() => {
+    fetch('/api/status/' + jid)
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('elapsed').textContent = d.elapsed + 's';
+        if (d.status === 'done' || d.status === 'error') {
+          clearInterval(polling); polling = null;
+          renderResults(d);
+        }
+      });
+  }, 500);
+}
+
+/* ── Render results ────────────────────────────────────────── */
+function renderResults(data) {
+  const body = document.getElementById('results-body');
+  const title = document.getElementById('results-title');
+  const summary = document.getElementById('summary');
+  const results = data.results || [];
+
+  if (data.error && results.length === 0) {
+    body.innerHTML = '<div class="r-item flag-found"><div class="label"><span class="badge badge-error">ERROR</span></div><div class="value">' + escHtml(data.error) + '</div></div>';
+    title.textContent = '❌ Error';
+    summary.innerHTML = '';
+    return;
+  }
+
+  // Count stats
+  let flags = results.filter(r => r.type === 'flag');
+  let decodes = results.filter(r => r.type === 'decode');
+
+  // Build HTML
+  let html = '';
+  for (const r of results) {
+    if (r.type === 'flag') {
+      html += `<div class="r-item flag-found">
+        <div class="label"><span class="badge badge-flag">🏁 FLAG</span></div>
+        <div class="value">${escHtml(r.flag)}</div>
+      </div>`;
+    } else if (r.type === 'decode') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-decode">DECODE</span></div>
+        <div class="value"><span class="score">${r.score}</span><span class="method">${escHtml(r.method)}</span> → ${escHtml((r.output || '').substring(0, 300))}</div>
+      </div>`;
+    } else if (r.type === 'scan') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-scan">SCAN</span>${r.section ? ' ' + escHtml(r.section) : ''}</div>
+        <div class="value">${escHtml((r.data || '').substring(0, 600))}</div>
+      </div>`;
+    } else if (r.type === 'network') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-net">NET</span>${r.section ? ' ' + escHtml(r.section) : ''}</div>
+        <div class="value">${escHtml((r.data || '').substring(0, 600))}</div>
+      </div>`;
+    } else if (r.type === 'target') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-target">TARGET</span></div>
+        <div class="value">${escHtml(r.url || r.path || '')}</div>
+      </div>`;
+    } else if (r.type === 'file') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-file">FILE</span></div>
+        <div class="value">${escHtml(r.path || '')}</div>
+      </div>`;
+    }
+  }
+
+  body.innerHTML = html || '<div class="empty"><span class="icon">🔍</span>No results found</div>';
+
+  // Title
+  if (flags.length > 0) {
+    title.textContent = `✅ ${flags.length} flag${flags.length > 1 ? 's' : ''} found!`;
+  } else {
+    title.textContent = 'Scan complete — no flags found';
+  }
+
+  // Summary
+  summary.innerHTML = `
+    <div class="stat stat-flags"><span class="num">${flags.length}</span> Flags</div>
+    <div class="stat stat-decodes"><span class="num">${decodes.length}</span> Decodes</div>
+    <div class="stat stat-warnings"><span class="num">${results.length}</span> Total results</div>
+  `;
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Enter key support ─────────────────────────────────────── */
+document.getElementById('web-url').addEventListener('keydown', e => {
+  if (e.key === 'Enter') runScan('web');
+});
+</script>
+</body>
+</html>

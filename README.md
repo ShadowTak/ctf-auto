@@ -120,6 +120,19 @@ python3 run.py --auto-lab all --limit 3   # จำกัดจำนวนแล
 
 ไม่ต้องติดตั้ง dependency ใดๆ (stdlib ล้วน) — ถ้ามี `nmap`, `pycryptodome` จะทำงานได้ลึกขึ้น
 
+### 🌐 Web UI (Beautiful dark-themed interface)
+
+```bash
+pip install flask          # ติดตั้งครั้งเดียว
+python3 web_app.py         # เปิด http://localhost:8088
+python3 web_app.py --port 9000  # custom port
+```
+
+- **Web tab**: ใส่ URL → auto-scan (recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, JWT, cookie forge, flag scan)
+- **Crypto tab**: ใส่ ciphertext หรือ upload ไฟล์ → auto-decode (base64 chain, RSA, XOR, Vigenère, hash crack, brainfuck, etc.)
+- **Network tab**: upload .pcap/.pcapng → auto-analyze (TCP reassembly, HTTP extraction, flag hunt)
+- Real-time progress, flag highlighting, decode ranking
+
 ---
 
 ## 🔍 ตอนนี้แก้อะไรได้บ้าง (สรุปความสามารถ)
