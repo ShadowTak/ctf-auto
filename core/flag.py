@@ -48,13 +48,26 @@ def _body_ratio(flag):
     return good / len(body)
 
 
+def _has_code_artifacts(flag):
+    """True if flag body contains JS/code artifacts like [ ], ( ), semicolons, etc."""
+    body = flag[flag.find("{") + 1:flag.rfind("}")]
+    # Real CTF flags never have these chars in the body
+    code_chars = set("[]();:=+<>!&|/\\\"'`")
+    return any(c in code_chars for c in body)
+
+
 def extract_flags(text, include_candidates=True):
     """Return (known_flags, candidate_flags) as sorted unique lists."""
     if not text:
         return [], []
     known = sorted(set(FLAG_RE.findall(text)) | set(_NAKED_RE.findall(text)))
     candidates = sorted(set(CANDIDATE_RE.findall(text)) - set(known)) if include_candidates else []
-    candidates = [c for c in candidates if _body_ratio(c) >= 0.6]
+    # Strict filtering for candidates: high body ratio + no code artifacts + reasonable length
+    candidates = [c for c in candidates if
+                  _body_ratio(c) >= 0.85 and
+                  not _has_code_artifacts(c) and
+                  len(c) < 200 and
+                  len(c) > 5]
     return known, candidates
 
 

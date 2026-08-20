@@ -223,6 +223,19 @@ def run_web(target, interactive=False):
 
     # dedupe flags
     flags = list(dict.fromkeys(flags))
+    # filter: only keep proper CTF flags (known prefix + braces, alnum body)
+    from core.flag import FLAG_RE, _body_ratio, _has_code_artifacts
+    filtered = []
+    for f in flags:
+        s = f.strip()
+        if FLAG_RE.fullmatch(s):
+            filtered.append(s)  # known prefix — always keep
+        elif ("{" in s and "}" in s and
+              _body_ratio(s) >= 0.85 and
+              not _has_code_artifacts(s) and
+              len(s) < 200):
+            filtered.append(s)  # looks like a real flag
+    flags = filtered
     print()
     if flags:
         section("🏁 FLAGS ที่พบ")
