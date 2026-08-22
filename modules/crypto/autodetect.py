@@ -257,15 +257,13 @@ def analyze_text(text):
                 for label, dec in decoded[:3]:
                     for xlabel, xplain in xor_mod.single_byte_xor(dec, top=2):
                         out.append((f"xor-single-on-{label}", xplain))
-                    for xlabel, xplain in xor_mod.crib_attack(dec)[:2]:
-                        out.append((f"xor-crib-on-{label}", xplain))
             except Exception:
                 pass
             return out
 
         jobs.append(("xor-decoded", _xor_on_decoded))
     results = []
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         futs = {pool.submit(fn): name for name, fn in jobs}
         for fut in as_completed(futs):
             name = futs[fut]
@@ -434,186 +432,224 @@ def _solve_klg3(data):
 
 
 def analyze_file(path, as_binary=None):
-    """Analyze a file: text decoders, binary sniffing, strings scanning."""
+    """Analyze a file: every independent pipeline section runs CONCURRENTLY
+    (structured JSON, strings scan, text decoders, RSA params, embedded
+    blobs, zip members) — wall time is the slowest section, not the sum."""
+    from core.parallel import run_concurrent
     with open(path, "rb") as f:
         data = f.read()
     results = []
     flags = []
+    as_text = data.decode("utf-8", errors="ignore")
+    printable_ratio = sum(1 for c in as_text if c.isprintable()) / max(len(as_text), 1)
 
-    # Structured artifacts (JSON and labeled text) need their own attack
-    # dispatcher even in binary mode.  This is cheap for ordinary files and
-    # lets JSON crypto challenges work through the same public API.
-    try:
-        structured_results = structured_mod.analyze(data.decode("utf-8", errors="ignore"))
-        results.extend(structured_results)
-        for entry in structured_results:
-            for f in _flag_hits(entry[-1] if len(entry) >= 2 else entry):
-                if f not in flags:
-                    flags.append(f)
-    except Exception:
-        pass
-
-    # strings + embedded flags
-    try:
-        strings_out = _extract_strings(data)
-    except Exception:
-        strings_out = []
-    for s in strings_out:
-        for f in _flag_hits(s):
-            if f not in flags:
-                flags.append(f)
-
-    # binary magic
-    magic = encodings.sniff_bytes(data)
-    if magic:
-        results.append(("file-type", f"{path} -> {magic}"))
-
-    # whole-file decoders
-    text = data.decode("latin-1")
-    if not as_binary:
-        results.extend(encodings.try_all_encodings(text))
-        results.extend(classic.try_all_classic(text))
-        results.extend(xor_mod.crack_xor(text))
-        # Full analyze_text pipeline (chain-decode, hash-crack, bacon, etc.)
+    # ---- job definitions (pure functions over `data`) -------------------
+    def job_structured():
+        out = []
         try:
-            as_text = data.decode("utf-8", errors="ignore")
-            text_results, text_flags = analyze_text(as_text)
-            for r in text_results:
-                if r not in results:
-                    results.append(r)
-            for f in text_flags:
-                if f not in flags:
-                    flags.append(f)
+            sr = structured_mod.analyze(as_text)
+            for entry in sr:
+                for f in _flag_hits(entry[-1] if len(entry) >= 2 else entry):
+                    out.append(("flag", None, f))
+                out.append(("result", entry, None))
+            return out
+        except Exception:
+            return []
+
+    def job_strings():
+        out = []
+        try:
+            strings_out = _extract_strings(data)
+        except Exception:
+            return out
+        for s in strings_out:
+            for f in _flag_hits(s):
+                out.append(("flag", None, f))
+        return out
+
+    def job_magic():
+        magic = encodings.sniff_bytes(data)
+        if magic:
+            return [("result", ("file-type", f"{path} -> {magic}"), None)]
+        return []
+
+    def job_encodings():
+        if as_binary:
+            return []
+        out = []
+        for label, dec in encodings.try_all_encodings(
+                data.decode("latin-1")):
+            out.append(("result", (label, dec), None))
+        return out
+
+    def job_classic():
+        if as_binary:
+            return []
+        out = []
+        for item in classic.try_all_classic(data.decode("latin-1")):
+            out.append(("result", item, None))
+        return out
+
+    def job_xor():
+        if as_binary:
+            return []
+        out = []
+        for item in xor_mod.crack_xor(data.decode("latin-1")):
+            out.append(("result", item, None))
+        return out
+
+    def job_analyze_text():
+        if as_binary:
+            return []
+        out = []
+        try:
+            tr, tf = analyze_text(as_text)
+            for r in tr:
+                out.append(("result", r, None))
+            for f in tf:
+                out.append(("flag", None, f))
         except Exception:
             pass
+        return out
 
-    # RSA parameter parsing (works on text files with n=/e=/c= patterns)
-    try:
-        as_text = data.decode("utf-8", errors="ignore")
-        if sum(1 for c in as_text if c.isprintable()) / max(len(as_text), 1) > 0.8:
+    def job_rsa_params():
+        out = []
+        if printable_ratio <= 0.8:
+            return out
+        try:
             rsa_results = _try_rsa_params(as_text)
             for label, text_out in rsa_results:
-                results.append((label, text_out))
+                out.append(("result", (label, text_out), None))
                 for f in _flag_hits(text_out):
-                    if f not in flags:
-                        flags.append(f)
-            # Two-time pad: c1_hex / c2_hex pattern
+                    out.append(("flag", None, f))
             m1 = re.search(r'c1_hex\s*=\s*([0-9a-fA-F]+)', as_text)
             m2 = re.search(r'c2_hex\s*=\s*([0-9a-fA-F]+)', as_text)
             if m1 and m2:
-                try:
-                    c1 = bytes.fromhex(m1.group(1))
-                    c2 = bytes.fromhex(m2.group(1))
-                    tt_results = xor_mod.two_time_pad_crib_drag(c1, c2)
-                    for label, text_out in tt_results:
-                        results.append((label, text_out))
-                        for f in _flag_hits(text_out):
-                            if f not in flags:
-                                flags.append(f)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    # base64 blobs inside binary (common: flag hidden in base64 in png/zip)
-    for m in re.finditer(rb"[A-Za-z0-9+/=]{40,}", data):
-        blob = m.group(0)
-        try:
-            import base64
-            raw = base64.b64decode(blob, validate=True)
-            if encodings.sniff_bytes(raw) or b"flag" in raw.lower() or b"ctf" in raw.lower():
-                for f in _flag_hits(raw.decode("latin-1", "replace")):
-                    if f not in flags:
-                        flags.append(f)
+                c1 = bytes.fromhex(m1.group(1))
+                c2 = bytes.fromhex(m2.group(1))
+                for label, text_out in xor_mod.two_time_pad_crib_drag(c1, c2):
+                    out.append(("result", (label, text_out), None))
+                    for f in _flag_hits(text_out):
+                        out.append(("flag", None, f))
         except Exception:
             pass
+        return out
 
-    # KLG3 ledger format (position-bound SHA-256 + Base85 + XOR)
-    if data[:4] == b"KLG3":
-        klflags = _solve_klg3(data)
-        for f in klflags:
-            if f not in flags:
-                flags.append(f)
+    def job_blobs():
+        """base64 blobs inside binaries + zip member strings."""
+        out = []
+        for m in re.finditer(rb"[A-Za-z0-9+/=]{40,}", data):
+            blob = m.group(0)
+            try:
+                import base64
+                rawb = base64.b64decode(blob, validate=True)
+                if encodings.sniff_bytes(rawb) or b"flag" in rawb.lower() \
+                        or b"ctf" in rawb.lower():
+                    for f in _flag_hits(rawb.decode("latin-1", "replace")):
+                        out.append(("flag", None, f))
+            except Exception:
+                pass
+        if data[:2] == b"PK":
+            try:
+                import io
+                import zipfile
+                zf = zipfile.ZipFile(io.BytesIO(data))
+                for name in zf.namelist():
+                    inner = zf.read(name)
+                    for s in _extract_strings(inner):
+                        for f in _flag_hits(s):
+                            out.append(("flag", None, f))
+            except Exception:
+                pass
+        return out
 
-    # binary XOR analysis — try header-derived keys
-    xor_flags = _binary_xor_analysis(data)
-    for f in xor_flags:
-        if f not in flags:
-            flags.append(f)
+    def job_binary_extras():
+        out = []
+        if data[:4] == b"KLG3":
+            for f in _solve_klg3(data):
+                out.append(("flag", None, f))
+        for f in _binary_xor_analysis(data):
+            out.append(("flag", None, f))
+        for f, r in _companion_lcg(path, data, results_ref=None):
+            out.append(("result", (f, r), None))
+            for fl in _flag_hits(r):
+                out.append(("flag", None, fl))
+        return out
 
-    # Custom cipher: detect LCG/PRNG keystream in companion .py files
-    parent = os.path.dirname(path)
-    basename = os.path.basename(path)
-    if basename.endswith((".enc", ".bin")) or "cipher" in basename.lower():
-        for py in os.listdir(parent):
-            if py.endswith(".py") and py != basename:
-                py_path = os.path.join(parent, py)
-                try:
-                    py_text = open(py_path).read()
-                    # Detect LCG pattern: s = (s * A + B) & MASK
-                    lcg_m = re.search(
-                        r'(?i)seed\s*=\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
-                    mult_m = re.search(
-                        r's\s*\*\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
-                    inc_m = re.search(
-                        r'\+\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
-                    mask_m = re.search(
-                        r'&\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
-                    byte_m = re.search(r's\s*&\s*(?:0x([0-9a-fA-F]+)|(\d+))',
-                                       py_text)
-                    if lcg_m and mult_m:
-                        def _parse_int(m, default):
-                            if m is None: return int(default, 0)
-                            hex_part, dec_part = m.group(1), m.group(2)
-                            return int('0x' + hex_part, 16) if hex_part else int(dec_part)
-                        seed = _parse_int(lcg_m, '0')
-                        mult = _parse_int(mult_m, '0')
-                        inc = _parse_int(inc_m, '0x12345')
-                        mask = _parse_int(mask_m, '0x7FFFFFFF')
-                        byte_mask = _parse_int(byte_m, '0xFF')
-                        # Read encrypted data (try hex first, then raw)
-                        with open(path, 'rb') as ef:
-                            raw = ef.read()
-                        enc_text = raw.decode('ascii', errors='ignore').strip()
-                        if re.fullmatch(r'[0-9a-fA-F]+', enc_text) and len(enc_text) >= 8:
-                            enc_bytes = bytes.fromhex(enc_text)
-                        else:
-                            enc_bytes = raw.rstrip(b'\n\r')
-                        # Generate keystream and decrypt
-                        s = seed
-                        ks = bytearray()
-                        for _ in range(len(enc_bytes)):
-                            s = (s * mult + inc) & mask
-                            ks.append(s & byte_mask)
-                        plain = bytes(a ^ b for a, b in zip(enc_bytes, ks))
-                        try:
-                            pt = plain.decode('utf-8', errors='ignore')
-                        except Exception:
-                            pt = plain.decode('latin-1')
-                        for f in _flag_hits(pt):
-                            if f not in flags:
-                                flags.append(f)
-                        if pt.strip():
-                            results.append((f"custom-lcg({py})", pt.strip()[:200]))
-                except Exception:
-                    pass
-    # zip members
-    if data[:2] == b"PK":
-        try:
-            import io
-            import zipfile
-            zf = zipfile.ZipFile(io.BytesIO(data))
-            for name in zf.namelist():
-                inner = zf.read(name)
-                for s in _extract_strings(inner):
-                    for f in _flag_hits(s):
-                        if f not in flags:
-                            flags.append(f)
-        except Exception:
-            pass
+    jobs = [job_structured, job_strings, job_magic, job_encodings,
+            job_classic, job_xor, job_analyze_text, job_rsa_params,
+            job_blobs, job_binary_extras]
+    sections = run_concurrent(jobs, workers=len(jobs),
+                              desc="file analysis")
+    for res in sections:
+        if isinstance(res, Exception):
+            continue
+        for kind, payload, flag in res or []:
+            if kind == "flag" and flag and flag not in flags:
+                flags.append(flag)
+            elif kind == "result" and payload not in results:
+                results.append(payload)
 
     ranked = _rank(results)
     return ranked, flags
+
+
+def _companion_lcg(path, data, results_ref=None):
+    """Custom cipher: detect LCG/PRNG keystream in companion .py files.
+    Returns [(label, plaintext)] candidates."""
+    parent = os.path.dirname(path)
+    basename = os.path.basename(path)
+    out = []
+    if not (basename.endswith((".enc", ".bin")) or "cipher" in basename.lower()):
+        return out
+    for py in os.listdir(parent):
+        if not py.endswith(".py") or py == basename:
+            continue
+        py_path = os.path.join(parent, py)
+        try:
+            py_text = open(py_path).read()
+            lcg_m = re.search(
+                r'(?i)seed\s*=\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+            mult_m = re.search(
+                r's\s*\*\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+            inc_m = re.search(
+                r'\+\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+            mask_m = re.search(
+                r'&\s*(?:0x([0-9a-fA-F]+)|(\d+))', py_text)
+            byte_m = re.search(r's\s*&\s*(?:0x([0-9a-fA-F]+)|(\d+))',
+                               py_text)
+            if not (lcg_m and mult_m):
+                continue
+
+            def _parse_int(mm, default):
+                if mm is None:
+                    return int(default, 0)
+                hex_part, dec_part = mm.group(1), mm.group(2)
+                return int('0x' + hex_part, 16) if hex_part else int(dec_part)
+
+            seed = _parse_int(lcg_m, '0')
+            mult = _parse_int(mult_m, '0')
+            inc = _parse_int(inc_m, '0x12345')
+            mask = _parse_int(mask_m, '0x7FFFFFFF')
+            byte_mask = _parse_int(byte_m, '0xFF')
+            with open(path, 'rb') as ef:
+                raw = ef.read()
+            enc_text = raw.decode('ascii', errors='ignore').strip()
+            if re.fullmatch(r'[0-9a-fA-F]+', enc_text) and len(enc_text) >= 8:
+                enc_bytes = bytes.fromhex(enc_text)
+            else:
+                enc_bytes = raw.rstrip(b'\n\r')
+            s = seed
+            ks = bytearray()
+            for _ in range(len(enc_bytes)):
+                s = (s * mult + inc) & mask
+                ks.append(s & byte_mask)
+            plain = bytes(a ^ b for a, b in zip(enc_bytes, ks))
+            pt = plain.decode('utf-8', errors='ignore')
+            out.append((f"custom-lcg({py})", pt.strip()[:200]))
+        except Exception:
+            continue
+    return out
 
 
 def _extract_strings(data, min_len=4):

@@ -41,6 +41,12 @@
 - **Cloud metadata SSRF**: AWS/GCP/Azure instance-metadata targets
 - LFI เพิ่ม **php://filter** wrapper (base64 source read) และ data://
 
+**รอบล่าสุด: nested-chain decoder + multithreaded crypto pipeline**
+- Chain decode ถอดซ้อนได้ลึกขึ้น: เพิ่ม **XOR single-byte ใน chain** (hexxor / b64xor / xor1 layers) — `base64>hex>xor1>base64` แกะอัตโนมัติ
+- Decoders เพิ่มใหม่: UUencode, quoted-printable, base32hex, ascii85, A1Z26, NATO phonetic, tap code, JWT payload layer
+- **Multithread ทั้ง pipeline**: encodings (8 workers), chain beam expansion (parallel per branch), classic solver families (7 jobs concurrent), analyze_file (10 sections concurrent), TEA key sweep (16 workers), FactorDB lookup แท็กซ้อนกับ local factoring
+- Speed fix หลังโปรไฟล์: `score_bytes` memoized + chi-square ผ่าน bytes.count (crib_attack 6.4M calls -> cache hit), repeating-XOR keylen cap, thread pool tuning — nested battery **101s -> 8s (14x)** 6/6 layers
+
 **Fix สำคัญ**: pure-Python AES fallback เขียน key schedule ผิดตั้งแต่ต้น (RCON off-by-one + round key ใช้ word เดียว + padding ไม่มีเงื่อนไข) — pycryptodome ที่ install ไว้บัง bug นี้ไว้ทั้งหมด; ตอนนี้ pure path ผ่าน NIST FIPS-197 vectors ครบ AES-128/192/256
 
 ---

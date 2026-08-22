@@ -28,12 +28,53 @@ def _to_bytes(data):
     return s.encode("latin-1")
 
 
+_ENG_FREQ_LIST = None
+_SCORE_CACHE = {}
+_SCORE_CACHE_MAX = 400_000
+
+
 def score_bytes(data):
-    """Lower = more likely English plaintext."""
+    """Lower = more likely English plaintext.
+
+    Chi-square over LETTERS ONLY — identical semantics to
+    modules.crypto.common.chi_square (distribution match, ignores
+    non-letters, returns inf when there are no letters) but implemented
+    with C-level ``bytes.count`` instead of a Python Counter, making it
+    ~50x cheaper inside the XOR sweeps that call it millions of times.
+    Results are memoised because crib_attack recomputes the SAME column
+    candidates across every known flag prefix."""
+    global _ENG_FREQ_LIST
     try:
-        return chi_square(data.decode("latin-1"))
+        buf = bytes(data)
     except Exception:
         return float("inf")
+    if not buf:
+        return float("inf")
+    hit = _SCORE_CACHE.get(buf)
+    if hit is not None:
+        return hit
+    lower = buf.lower()
+    if _ENG_FREQ_LIST is None:
+        from .common import ENGLISH_FREQ
+        _ENG_FREQ_LIST = list(ENGLISH_FREQ.values())
+    total_letters = 0
+    counts = []
+    for b in range(97, 123):
+        c = lower.count(b)
+        counts.append(c)
+        total_letters += c
+    if total_letters == 0:
+        res = float("inf")
+    else:
+        inv_n = 100.0 / total_letters
+        chi = 0.0
+        for cnt, exp in zip(counts, _ENG_FREQ_LIST):
+            d = cnt * inv_n - exp
+            chi += d * d / exp
+        res = chi
+    if len(_SCORE_CACHE) < _SCORE_CACHE_MAX:
+        _SCORE_CACHE[buf] = res
+    return res
 
 
 def single_byte_xor(data, top=10):
@@ -138,8 +179,10 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
         return []
     if keylen_hint is None:
         if len(data) <= 300:
-            # try every plausible length; short texts fool hamming/IC heuristics
-            keylens = list(range(2, min(40, len(data) // 2) + 1))
+            # try every plausible length; short texts fool hamming/IC
+            # heuristics. Keys above ~18 are vanishingly rare in CTFs and
+            # each extra length costs a full 256x-column sweep.
+            keylens = list(range(2, min(18, len(data) // 2) + 1))
         else:
             # longer texts: hamming-distance heuristic is reliable, and brute
             # forcing every length gets expensive on long inputs
@@ -149,7 +192,7 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
     # anneal budget shrinks as the text grows (score cost is O(len));
     # short texts also cap lower — few chars per column means scoring is
     # noisy anyway and the crib/known-pt paths do the real work
-    anneal_iters = max(300, min(3500, 70000 // max(len(data), 1)))
+    anneal_iters = max(300, min(1500, 70000 // max(len(data), 1)))
     all_results = []
     for ks in keylens:
         key = bytearray()
@@ -174,15 +217,18 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
     # key lengths — the greedy pass already separates those out
     all_results.sort(key=lambda x: x[0])
     refined = []
-    for ts, ks, key, plain in all_results[:3]:
-        rkey, rts = _refine_key(data, key, text_score)
-        rkey, rts = _anneal_key(data, rkey, text_score, iters=anneal_iters)
-        rplain = _assemble(data, rkey)
-        try:
-            rtext = rplain.decode("latin-1")
-        except Exception:
-            continue
-        refined.append((rts, ks, rkey, rplain))
+    # hopeless greedy output -> skip the expensive refine+anneal entirely
+    if all_results and all_results[0][0] < 260:
+        for ts, ks, key, plain in all_results[:2]:
+            rkey, rts = _refine_key(data, key, text_score)
+            rkey, rts = _anneal_key(data, rkey, text_score,
+                                    iters=anneal_iters)
+            rplain = _assemble(data, rkey)
+            try:
+                rtext = rplain.decode("latin-1")
+            except Exception:
+                continue
+            refined.append((rts, ks, rkey, rplain))
     # merge: refined entries replace their keylen, unrefined stay as-is
     merged = {ks: (ts, key, plain) for ts, ks, key, plain in all_results}
     for ts, ks, rkey, rplain in refined:

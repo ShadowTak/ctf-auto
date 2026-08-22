@@ -154,24 +154,43 @@ def crack_tea_family(blob, wordlist=None, top=5):
     results = []
     keys = _key_candidates(wordlist)
 
-    def attempt(cipher_fn, name):
-        for key in keys:
-            plain = cipher_fn(key)
+    from core.parallel import pmap
+
+    def sweep(cipher_fn, name, buf):
+        def one(item):
+            _, key = item
+            try:
+                plain = cipher_fn(key)
+            except Exception:
+                return None
             if not plain:
-                continue
+                return None
             score = _crib_score(plain)
             if score > 120:
-                results.append((score, f"{name} key={key!r}", plain))
+                return (score, f"{name} key={key!r}", plain)
+            return None
+
+        out = []
+        for (_item, res) in pmap(one, list(enumerate(keys)), workers=16,
+                                 desc=name):
+            if isinstance(res, Exception) or res is None:
+                continue
+            out.append(res)
+        return out
 
     for endian, buf in (("little", blob), ("big", _words_swap(blob))):
         if len(buf) % 8 == 0:
-            attempt(lambda k: _feistel_decrypt(
-                buf, k, lambda a, b, kk: tea_decrypt_block(a, b, kk)), f"tea-{endian}")
-            attempt(lambda k: _feistel_decrypt(
-                buf, k, lambda a, b, kk: xtea_decrypt_block(a, b, kk)),
-                f"xtea-{endian}")
+            results.extend(sweep(
+                lambda k: _feistel_decrypt(
+                    buf, k, lambda a, b, kk: tea_decrypt_block(a, b, kk)),
+                f"tea-{endian}", buf))
+            results.extend(sweep(
+                lambda k: _feistel_decrypt(
+                    buf, k, lambda a, b, kk: xtea_decrypt_block(a, b, kk)),
+                f"xtea-{endian}", buf))
         if len(buf) % 4 == 0 and len(buf) >= 8:
-            attempt(lambda k: xxtea_decrypt(buf, k), f"xxtea-{endian}")
+            results.extend(sweep(lambda k: xxtea_decrypt(buf, k),
+                                 f"xxtea-{endian}", buf))
     results.sort(key=lambda r: -r[0])
     dedup = []
     seen = set()

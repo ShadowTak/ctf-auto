@@ -13,6 +13,20 @@ import zlib
 
 from .common import is_printable_text
 
+_LLE_CACHE = {}
+
+
+def _lle_cached(text):
+    """Cached looks_like_encoding — the chain beam calls it per candidate
+    per level, and the underlying probe is not free."""
+    hit = _LLE_CACHE.get(text)
+    if hit is None:
+        from .common import looks_like_encoding
+        hit = looks_like_encoding(text)
+        if len(_LLE_CACHE) < 100_000:
+            _LLE_CACHE[text] = hit
+    return hit
+
 # ---------------------------------------------------------------------------
 # Primitive decoders — each returns str or None
 # ---------------------------------------------------------------------------
@@ -52,6 +66,265 @@ def dec_base85(s):
         except Exception:
             continue
     return None
+
+
+def dec_ascii85(s):
+    """Adobe-style ASCII85 with optional <~ ~> framing."""
+    t = s.strip()
+    if t.startswith("<~"):
+        t = t[2:]
+    if t.endswith("~>"):
+        t = t[:-2]
+    if not t:
+        return None
+    try:
+        return base64.a85decode(t).decode("latin-1")
+    except Exception:
+        return None
+
+
+def dec_uuencode(s):
+    """UUencoding: 'begin 644 x' header lines or bare length-char rows."""
+    import binascii
+    out = bytearray()
+    saw_any = False
+    for line in s.splitlines():
+        line = line.strip()
+        if not line or line.startswith("begin "):
+            continue
+        if line == "end" or line == "`":
+            break
+        try:
+            chunk = binascii.a2b_uu(line)
+        except Exception:
+            continue
+        if chunk:
+            saw_any = True
+            out += chunk
+    if not saw_any or not out:
+        return None
+    text = bytes(out).decode("latin-1")
+    return text if is_printable_text(text) else None
+
+
+def dec_quoted_printable(s):
+    import quopri
+    try:
+        raw = quopri.decodestring(s.encode("latin-1"))
+        text = raw.decode("utf-8", "replace")
+    except Exception:
+        return None
+    return text if "=" in s and is_printable_text(text) else None
+
+
+def dec_base32hex(s):
+    """RFC 4648 base32hex (0-9,A-V) decoded via alphabet translation."""
+    t = "".join(c for c in s.upper() if c.isalnum())
+    if len(t) < 8 or any(c in "89GHIJKMNOPQRSTUVWXYZ".replace("V", "")
+                         for c in t):
+        return None
+    table = str.maketrans("0123456789ABCDEFGHIJKLMNOPQRSTUV",
+                          "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+    std = t.translate(table)
+    try:
+        padded = std + "=" * (-len(std) % 8)
+        return base64.b32decode(padded).decode("latin-1")
+    except Exception:
+        return None
+
+
+_A1Z26_RE = re.compile(r"\d{1,2}")
+
+
+def dec_a1z26(s):
+    """A1Z26: '8 5 12 12 15' -> HELLO. Only fires when every number fits."""
+    toks = _A1Z26_RE.findall(s)
+    if len(toks) < 3 or len(toks) * 2 < sum(len(t) for t in toks) // 2:
+        pass
+    vals = [int(t) for t in toks]
+    if len(vals) < 3 or any(not 1 <= v <= 26 for v in vals):
+        return None
+    # require separators between most numbers (avoid eating decimal/hex data)
+    if len(re.sub(r"[^0-9]", "", s)) != sum(len(t) for t in toks):
+        return None
+    return "".join(chr(64 + v) for v in vals)
+
+
+_NATO = {
+    "alfa": "a", "alpha": "a", "bravo": "b", "charlie": "c", "delta": "d",
+    "echo": "e", "foxtrot": "f", "golf": "g", "hotel": "h", "india": "i",
+    "juliett": "j", "juliet": "j", "kilo": "k", "lima": "l", "mike": "m",
+    "november": "n", "oscar": "o", "papa": "p", "quebec": "q", "romeo": "r",
+    "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
+    "whiskey": "w", "xray": "x", "x-ray": "x", "yankee": "y", "zulu": "z",
+}
+
+
+def dec_nato(s):
+    words = re.findall(r"[a-z]+", s.lower())
+    if len(words) < 3:
+        return None
+    out = []
+    hits = 0
+    for w in words:
+        if w in _NATO:
+            out.append(_NATO[w])
+            hits += 1
+        elif w in ("space", "spase"):
+            out.append(" ")
+        else:
+            return None
+    if hits < max(3, len(words) - 1):
+        return None
+    return "".join(out)
+
+
+_TAP_ROWS = "ABCDE FGHIJ LMNOP QRSTU VWXYZ"
+
+
+def dec_tapcode(s):
+    """Tap code: '.. ..' dot groups or '23 31' digit pairs (no letter K)."""
+    alpha = _TAP_ROWS.replace(" ", "")
+    out = []
+    groups = re.split(r"[/\n]+|\s{2,}|(?<=\d)\s+(?=\d)", s.strip())
+    groups = [g for g in groups if g]
+    if len(groups) < 3:
+        return None
+    for g in groups:
+        digits = re.sub(r"[^1-5]", "", g)
+        dots_only = set(g) <= {".", " ", "/", "\n"}
+        if dots_only:
+            halves = [h for h in re.split(r"\s+", g.strip()) if h]
+            if len(halves) != 2:
+                return None
+            row, col = len(halves[0]), len(halves[1])
+        else:
+            if len(digits) != 2:
+                return None
+            row, col = int(digits[0]), int(digits[1])
+        if not (1 <= row <= 5 and 1 <= col <= 5):
+            return None
+        ch = alpha[(row - 1) * 5 + col - 1]
+        out.append("c" if ch == "k" else ch.lower())
+    return "".join(out)
+
+
+def dec_jwt_payload(s):
+    """Decode a JWT's payload segment as a chain layer (no verification)."""
+    parts = s.strip().split(".")
+    if len(parts) != 3:
+        return None
+    seg = parts[1]
+
+    def b64pad(x):
+        return x + "=" * (-len(x) % 4)
+
+    for decoder in (
+            lambda x: base64.urlsafe_b64decode(b64pad(x)),
+            lambda x: base64.b64decode(b64pad(x))):
+        try:
+            text = decoder(seg).decode("utf-8")
+            if text.startswith("{") and is_printable_text(text):
+                return text
+        except Exception:
+            continue
+    return None
+
+
+def _xor_brute_bytes_strict(raw):
+    """Shared XOR-brute core over RAW bytes; returns best candidate str."""
+    from core.flag import extract_flags as _ef
+    from .common import is_probable_english, looks_like_encoding, chi_square
+    if len(raw) < 8:
+        return None
+    enc_charset = frozenset(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        "+/=_-{}")
+    cands = []
+    for k in range(1, 256):
+        plain = bytes(b ^ k for b in raw)
+        printable = sum(32 <= b < 127 or b in (9, 10, 13) for b in plain)
+        ratio = printable / len(plain)
+        if ratio < 0.92:
+            continue
+        letters = "".join(chr(b) for b in plain if 65 <= b <= 90 or
+                          97 <= b <= 122)
+        chi = chi_square(letters.lower()) if len(letters) >= 4 else 9999.0
+        enc_ratio = sum(1 for b in plain if chr(b) in enc_charset) / len(plain)
+        score = (-(ratio * 100.0) - enc_ratio * 60.0 + min(chi, 400.0))
+        cands.append((score, k, ratio, plain))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: t[0])
+    best_enc = None
+    for _, k, ratio, plain in cands[:5]:
+        text = plain.decode("latin-1")
+        known, cands_f = _ef(text)
+        if known or cands_f:
+            return text
+        if looks_like_encoding(text):
+            if ratio >= 0.99:
+                return text
+            if best_enc is None:
+                best_enc = text
+            continue
+        if is_probable_english(text, threshold=260):
+            return text
+    return best_enc
+
+
+def _dec_hex_xor_strict(s):
+    """hex-transported single-byte-XOR ciphertext -> next layer, in ONE
+    structural step (avoids the unprintable intermediate that used to get
+    the branch rejected)."""
+    t = s.strip()
+    if len(t) < 16 or len(t) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", t):
+        return None
+    return _xor_brute_bytes_strict(bytes.fromhex(t))
+
+
+def _dec_b64_xor_strict(s):
+    """base64-transported single-byte-XOR ciphertext -> next layer."""
+    t = "".join(s.split())
+    if len(t) < 12:
+        return None
+    try:
+        raw = base64.b64decode(t, validate=True)
+    except Exception:
+        try:
+            raw = base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
+        except Exception:
+            return None
+    if len(raw) < 8:
+        return None
+    printable = sum(32 <= b < 127 or b in (9, 10, 13) for b in raw)
+    if printable / len(raw) > 0.95:
+        # decoded payload is plain text — the ordinary base64 layer covers
+        # it; XOR brute would only spawn duplicate branches
+        return None
+    return _xor_brute_bytes_strict(raw)
+
+
+def _dec_xor_single_strict(s):
+    """Single-byte XOR as an IN-CHAIN layer. Fires only when some key
+    yields a flag, confidently-English text, OR another decodable encoding
+    layer — so nested chains like base64 -> XOR -> base64 resolve
+    automatically without drowning the beam in garbage branches.
+
+    Two-phase design: a cheap printable+chi-square filter ranks all 256
+    keys first; the expensive checks (flag regex / encoder probes) run on
+    only the top handful."""
+    t = s.strip()
+    # pure transports already have dedicated composite layers (hexxor /
+    # b64xor); skipping here avoids a redundant 255-key sweep per node
+    if re.fullmatch(r"[0-9a-fA-F]{16,}", t) or len(t) >= 12 and \
+            re.fullmatch(r"[A-Za-z0-9+/=]+", t):
+        return None
+    try:
+        raw = s.encode("latin-1")
+    except Exception:
+        return None
+    return _xor_brute_bytes_strict(raw)
 
 
 def dec_hex(s):
@@ -972,6 +1245,7 @@ _ALL_LAYER_DECODERS = [
     ("base64", dec_base64),
     ("base32", dec_base32),
     ("base85", dec_base85),
+    ("ascii85", dec_ascii85),
     ("base45", dec_base45),
     ("base58", dec_base58),
     ("base62", dec_base62),
@@ -988,6 +1262,16 @@ _ALL_LAYER_DECODERS = [
     ("gzip", lambda s: dec_gzip(s.encode("latin-1"))),
     ("brainfuck", dec_brainfuck),
     ("ook", dec_ook),
+    ("uuencode", dec_uuencode),
+    ("quoted-printable", dec_quoted_printable),
+    ("base32hex", dec_base32hex),
+    ("a1z26", dec_a1z26),
+    ("nato", dec_nato),
+    ("tapcode", dec_tapcode),
+    ("jwt-payload", dec_jwt_payload),
+    ("xor1", _dec_xor_single_strict),
+    ("hexxor", _dec_hex_xor_strict),
+    ("b64xor", _dec_b64_xor_strict),
 ]
 
 _CHAIN_TRANSFORMS = [
@@ -1059,56 +1343,76 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
     # Multi-layer encoding chains in CTF are short blobs. Long inputs (source
     # code, logs, config files) explode the beam with dozens of plausible
     # substrings — no flag hides under 20 layers of a 5 KB file. Punctuation-
-    # heavy text (Python source etc.) is also never a layered encoding chain.
+    # heavy text (Python source etc.) is also never a layered chain — BUT
+    # XOR ciphertext is exactly a dense non-alnum blob with no spaces, so
+    # space-free blobs of any charset stay on the full beam.
     if len(text) > 4000:
         return chain_decode(text, max_depth=6)
+    has_spaces = " " in text or "\n" in text
     non_alnum = sum(1 for c in text if not (c.isalnum() or c in "+/=" )) / max(len(text), 1)
-    if non_alnum > 0.25:
+    if non_alnum > 0.25 and (has_spaces or len(text) > 600):
         return chain_decode(text, max_depth=6)
     results = []
     frontier = [(text, "")]
     seen_nodes = {text}
     transform_names = {n for n, _ in _CHAIN_TRANSFORMS}
-    for _ in range(max_depth):
-        if not frontier:
+
+    def expand_branch(item):
+        """Apply every structural decoder (then transforms on dead ends)
+        to one branch. Pure function — safe to run across a thread pool."""
+        cur, path = item
+        produced = []
+        applied_structural = False
+        for name, fn in _ALL_LAYER_DECODERS:
+            try:
+                nxt = fn(cur)
+            except Exception:
+                nxt = None
+            if not nxt or nxt == cur:
+                continue
+            if not is_printable_text(nxt) and not _chain_flaggy(nxt):
+                continue
+            if nxt in seen_nodes:
+                continue
+            applied_structural = True
+            new_path = f"{path}>{name}" if path else name
+            produced.append((nxt, new_path))
+        if applied_structural:
+            return produced, True
+        # dead end: peel a rot13/leet-style layer. Never chain a transform
+        # onto another transform (rot13>rot47>rot13>... is pure noise)
+        last = path.rsplit(">", 1)[-1] if path else ""
+        if last in transform_names:
+            return [], False
+        produced = []
+        for name, fn in _CHAIN_TRANSFORMS:
+            try:
+                nxt = fn(cur)
+            except Exception:
+                nxt = None
+            if not nxt or nxt == cur:
+                continue
+            new_path = f"{path}>{name}" if path else name
+            produced.append((nxt, new_path))
+        return produced, bool(produced)
+
+    import time as _time
+    deadline = _time.monotonic() + 12.0  # hard wall-clock guard per chain
+    for _depth in range(max_depth):
+        if not frontier or _time.monotonic() > deadline:
             break
+        from core.parallel import pmap as _pmap
         next_frontier = []
-        for cur, path in frontier:
-            applied_structural = False
-            for name, fn in _ALL_LAYER_DECODERS:
-                try:
-                    nxt = fn(cur)
-                except Exception:
-                    nxt = None
-                if not nxt or nxt == cur:
-                    continue
-                if not is_printable_text(nxt) and not _chain_flaggy(nxt):
-                    continue
-                if nxt in seen_nodes:
+        for (_branch, produced) in _pmap(expand_branch, frontier,
+                                         workers=min(4, max(2, len(frontier))),
+                                         desc="chain"):
+            if isinstance(produced, Exception):
+                continue
+            produced_list, _applied = produced
+            for nxt, new_path in produced_list:
+                if nxt in seen_nodes or len(seen_nodes) > 600:
                     continue
                 seen_nodes.add(nxt)
-                applied_structural = True
-                new_path = f"{path}>{name}" if path else name
-                next_frontier.append((nxt, new_path))
-                results.append((new_path, nxt))
-            if applied_structural:
-                continue
-            # dead end: peel a rot13/leet-style layer. Never chain a transform
-            # onto another transform (rot13>rot47>rot13>... is pure noise)
-            last = path.rsplit(">", 1)[-1] if path else ""
-            if last in transform_names:
-                continue
-            for name, fn in _CHAIN_TRANSFORMS:
-                try:
-                    nxt = fn(cur)
-                except Exception:
-                    nxt = None
-                if not nxt or nxt == cur:
-                    continue
-                if nxt in seen_nodes:
-                    continue
-                seen_nodes.add(nxt)
-                new_path = f"{path}>{name}" if path else name
                 next_frontier.append((nxt, new_path))
                 results.append((new_path, nxt))
         if not next_frontier:
@@ -1117,8 +1421,15 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
         def sortkey(item):
             txt, _ = item
             bonus = -1000.0 if _chain_flaggy(txt) else 0.0
+            # a node that itself looks like another encoding layer MUST
+            # outrank same-length junk — this is what keeps multi-layer
+            # chains (hex>xor>base64...) alive against decoy branches
+            try:
+                if _lle_cached(txt):
+                    bonus -= 600.0
+            except Exception:
+                pass
             return bonus + _chain_score(txt)
-
         next_frontier.sort(key=sortkey)
         frontier = next_frontier[:max_branches]
     return results
@@ -1128,11 +1439,14 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
 # Public "run all encodings" — used by autodetect
 # ---------------------------------------------------------------------------
 def try_all_encodings(text):
-    """Returns list of (label, decoded_text)."""
-    results = []
+    """Returns list of (label, decoded_text). Decoders run in parallel —
+    they are pure functions, so a thread pool cuts wall time to the slowest
+    single decoder instead of the sum."""
+    from core.parallel import pmap
     checks = [
         ("base64", dec_base64), ("base32", dec_base32), ("base16", dec_base16),
-        ("base85", dec_base85), ("base45", dec_base45),
+        ("base85", dec_base85), ("ascii85", dec_ascii85),
+        ("base45", dec_base45),
         ("base58", dec_base58), ("base62", dec_base62), ("base36", dec_base36),
         ("hex", dec_hex), ("binary", dec_binary), ("octal", dec_octal),
         ("decimal", dec_decimal), ("url", dec_url), ("unicode", dec_unicode),
@@ -1141,12 +1455,24 @@ def try_all_encodings(text):
         ("ook", dec_ook), ("emoji", dec_emoji),
         ("emoji-offset", dec_emoji_offset), ("emoji-subst", dec_emoji_subst),
         ("malbolge", dec_malbolge), ("custom-base", dec_custom_base),
+        ("uuencode", dec_uuencode), ("quoted-printable", dec_quoted_printable),
+        ("base32hex", dec_base32hex), ("a1z26", dec_a1z26),
+        ("nato", dec_nato), ("tapcode", dec_tapcode),
+        ("jwt-payload", dec_jwt_payload),
     ]
-    for label, fn in checks:
+
+    def run_check(item):
+        label, fn = item
         try:
-            out = fn(text)
+            return (label, fn(text))
         except Exception:
-            out = None
+            return (label, None)
+
+    results = []
+    for (_item, res) in pmap(run_check, checks, workers=8, desc="encodings"):
+        if isinstance(res, Exception):
+            continue
+        label, out = res
         if out and out != text and is_printable_text(out):
             results.append((label, out))
     # gzip works on bytes

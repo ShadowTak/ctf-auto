@@ -160,11 +160,22 @@ def factor_db_lookup(n, timeout=6):
 # ---------------------------------------------------------------------------
 def factor_n(n, use_factordb=True, verbose=False):
     """Fully factor n using every method available. Returns sorted list of
-    prime-ish factors (composite leftovers are included if unfactored)."""
+    prime-ish factors. The FactorDB network lookup races the local methods
+    in a background thread — whichever answers first wins."""
     if n < 4:
         return [n] if n > 1 else []
     todo = [n]
     found = []
+    factordb_result = {"parts": None}
+    if use_factordb:
+        import threading
+
+        def _lookup():
+            parts = factor_db_lookup(n)
+            if parts and all(_is_probable_prime(x) for x in parts):
+                factordb_result["parts"] = sorted(parts)
+
+        threading.Thread(target=_lookup, daemon=True).start()
 
     def emit(value):
         if value > 1:
@@ -173,6 +184,10 @@ def factor_n(n, use_factordb=True, verbose=False):
     steps = 0
     while todo and steps < 64:
         steps += 1
+        # opportunistically accept a finished FactorDB answer
+        if factordb_result["parts"] and \
+                math.prod(factordb_result["parts"]) == n:
+            return list(factordb_result["parts"])
         m = todo.pop()
         if m == 1:
             continue
@@ -205,20 +220,15 @@ def factor_n(n, use_factordb=True, verbose=False):
         # 4) Pollard rho
         if not factor:
             factor = pollard_rho(m)
-        # 5) FactorDB
-        if not factor and use_factordb:
-            parts = factor_db_lookup(m)
-            if parts:
-                if verbose:
-                    info_line(f"FactorDB: {m} = {' * '.join(map(str, parts))}")
-                found.extend(p for p in parts if p > 1)
-                continue
         if not factor:
             warn_line(f"factor: {m} ยังแยกไม่ได้ (ลอง FactorDB เองหรือเพิ่ม budget)")
             found.append(m)
             continue
         emit(factor)
         emit(m // factor)
+    # final FactorDB chance for anything left unfactored
+    if factordb_result["parts"] and math.prod(factordb_result["parts"]) == n:
+        return list(factordb_result["parts"])
     return sorted(found)
 
 
