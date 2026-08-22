@@ -589,24 +589,93 @@ def solve_substitution(text, iterations=None):
     return [(f"substitution (score={best_overall_score:.2f})", plain)]
 
 
-# ---------------------------------------------------------------------------
-# Public entry: try every classic solver
-# ---------------------------------------------------------------------------
 def try_all_classic(text):
-    results = []
-    results.append(("atbash", atbash(text)))
-    results.extend(solve_caesar(text))
-    results.extend(solve_affine(text))
-    cands = solve_vigenere(text)
-    results.extend(cands)
-    # hill-climb booster: only when the quick solver produced nothing
-    # convincingly English (keeps the common path fast)
+    """Run every classic solver family CONCURRENTLY (they are independent
+    pure functions) and merge their candidates."""
+    from core.parallel import run_concurrent
+
+    def _safe(fn):
+        def wrapper():
+            try:
+                return fn()
+            except Exception:
+                return []
+        return wrapper
+
     letters_hc = _norm(text)
+
+    def job_quick():
+        out = []
+        out.append(("atbash", atbash(text)))
+        out.extend(solve_caesar(text))
+        out.extend(solve_affine(text))
+        return out
+
+    def job_vigenere():
+        return list(solve_vigenere(text))
+
+    def job_beaufort():
+        return list(solve_beaufort_variants(text))
+
+    def job_transpositions():
+        out = []
+        out.extend(solve_railfence(text))
+        out.extend(solve_columnar(text))
+        return out
+
+    def job_patterns():
+        out = []
+        if re.fullmatch(r"[abAB01\s]+", text):
+            out.append(("bacon", dec_bacon(text)))
+        if re.fullmatch(r"[2-9\s]+", text) and len(text.strip()) >= 6:
+            out.append(("multitap-t9", dec_multitap(text)))
+        stripped = text.strip()
+        if re.fullmatch(r"[1-5\s]+", stripped) and \
+                len(re.sub(r"\s", "", stripped)) % 2 == 0 and \
+                len(stripped) >= 4:
+            out.append(("polybius", dec_polybius(stripped)))
+        return out
+
+    def job_keyboard():
+        out = []
+        if len(_norm(text)) >= 8:
+            for steps in (1, 2, -1, -2):
+                kb = keyboard_shift_decode(text, steps)
+                score = text_score(kb)
+                if score < 400:
+                    out.append((f"keyboard-shift({steps:+d})", kb))
+        return out
+
+    def job_substitution():
+        try:
+            return list(solve_substitution(text))
+        except Exception:
+            return []
+
+    jobs = [
+        ("── caesar/affine/atbash ──", job_quick),
+        ("── vigenere ──", job_vigenere),
+        ("── beaufort family ──", job_beaufort),
+        ("── railfence/columnar ──", job_transpositions),
+        ("── patterns ──", job_patterns),
+        ("── keyboard ──", job_keyboard),
+        ("── substitution ──", job_substitution),
+    ]
+    results = []
+    outputs = run_concurrent([_safe(fn) for _, fn in jobs],
+                             workers=len(jobs), desc="classic")
+    for (_title, res) in zip(jobs, outputs):
+        if isinstance(res, Exception):
+            continue
+        results.extend(res)
+
+    # hill-climb booster for vigenere: only when nothing convincingly
+    # English came out of the parallel pass
     if len(letters_hc) >= 10 and letters_hc.isalpha():
         need_climb = True
-        for entry in cands:
+        for entry in results:
             dec = entry[-1]
-            if _english_fitness(dec) >= _GOOD_FITNESS:
+            if isinstance(dec, str) and _english_fitness(dec) >= _GOOD_FITNESS:
                 need_climb = False
                 break
         if need_climb and len(letters_hc) <= 400:
@@ -623,30 +692,7 @@ def try_all_classic(text):
                      dec))
             hc_ranked.sort(key=lambda r: -r[0])
             results.extend((lbl, dec) for _, lbl, dec in hc_ranked[:2])
-    results.extend(solve_beaufort_variants(text))
-    results.extend(solve_railfence(text))
-    cands = solve_columnar(text)
-    results.extend(cands)
-    if re.fullmatch(r"[abAB01\s]+", text):
-        results.append(("bacon", dec_bacon(text)))
-    if re.fullmatch(r"[2-9\s]+", text) and len(text.strip()) >= 6:
-        results.append(("multitap-t9", dec_multitap(text)))
-    stripped = text.strip()
-    if re.fullmatch(r"[1-5\s]+", stripped) and \
-            len(re.sub(r"\s", "", stripped)) % 2 == 0 and \
-            len(stripped) >= 4:
-        results.append(("polybius", dec_polybius(stripped)))
-    letters = _norm(text)
-    if len(letters) >= 8:
-        for steps in (1, 2, -1, -2):
-            kb = keyboard_shift_decode(text, steps)
-            score = text_score(kb)
-            if score < 400:  # decent English-ish decode
-                results.append((f"keyboard-shift({steps:+d})", kb))
-    try:
-        results.extend(solve_substitution(text))
-    except Exception:
-        pass
+    return results
     return results
 
 

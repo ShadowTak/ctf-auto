@@ -341,6 +341,60 @@ def t_flask_session():
     check("flask: raw itsdangerous defaults", verify(tok2, sec))
 
 
+
+# ---------------------------------------------------------------------------
+# 7b) nested chain decoding (multi-layer, XOR inside chains)
+# ---------------------------------------------------------------------------
+def t_nested_chains():
+    import base64
+    import time as _t
+
+    def b64(s):
+        if isinstance(s, str):
+            s = s.encode()
+        return base64.b64encode(s).decode()
+
+    def rot13(s):
+        out = []
+        for c in s:
+            if c.isalpha():
+                b = "A" if c.isupper() else "a"
+                out.append(chr((ord(c) - ord(b) + 13) % 26 + ord(b)))
+            else:
+                out.append(c)
+        return "".join(out)
+
+    FLAG = "flag{n3st3d_ch41n_m4st3r}"
+    cases = {
+        "hex>rot13": rot13(FLAG).encode().hex(),
+        "base64>hex>rot13": b64(rot13(FLAG).encode().hex()),
+        "xor1>base64": "".join(chr(ord(c) ^ 0x2A) for c in b64(FLAG)),
+    }
+    deep = FLAG
+    for _ in range(5):
+        deep = b64(deep)
+    cases["base64x5"] = deep
+    cases["hex>xor1>base64"] = "".join(
+        chr(ord(c) ^ 0x5B) for c in b64(FLAG)).encode().hex()
+    s1 = b64(FLAG)
+    s2 = "".join(chr(ord(c) ^ 0x11) for c in s1)
+    cases["base64>hex>xor1>base64"] = b64(s2.encode().hex())
+
+    from modules.crypto.autodetect import analyze_text
+    ok = 0
+    worst = 0.0
+    for name, ct in cases.items():
+        t0 = _t.time()
+        _, flags = analyze_text(ct)
+        worst = max(worst, _t.time() - t0)
+        if any("n3st3d" in f.lower() for f in flags):
+            ok += 1
+    check("nested chains: 6/6 layered payloads solved", ok == len(cases),
+          f"{ok}/{len(cases)}")
+    check("nested chains: worst-case latency < 15s", worst < 15,
+          f"{worst:.1f}s")
+
+
 # ---------------------------------------------------------------------------
 # 8) live web servers
 # ---------------------------------------------------------------------------
@@ -587,6 +641,7 @@ def main():
     t_prng()
     t_length_ext()
     t_classic()
+    t_nested_chains()
     t_flask_session()
     print("== web live ==")
     t_web_live()
