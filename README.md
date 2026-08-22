@@ -9,6 +9,12 @@
 | 🔐 **Crypto** | auto-detect & decode ทุกวิธี (base16/32/45/58/62/64/85, hex, binary, octal, morse, brainfuck, Ook!, **Malbolge**, ROT13/47, leet, gzip/zlib, file-magic sniff) + **beam-search chain-decode หลายชั้น** (แตกทุกเส้นทาง เก็บทุก flag — ผ่าน TCTT base85→base45 chain) + **custom-alphabet base-N** (Thai alphabet `ก-ฮ+๐-๙+0-9` แบบ THCTT New Base64, emoji base-100) + **emoji solver** (2-state → binary, unicode-offset 0x1F3F7, substitution word-matching) + **base62 case-recovery** (THCTT Bad62: enumerate case variants ต่อ chunk + flag-body scoring) + payload extraction หลัง label (`cipher:`/`cipher_hex:`) + classic ciphers (Caesar, **Vigenere auto-key: sweep + flag-prefix crib + per-char indexing**, Affine, Atbash, Railfence, **Bacon 0/1**, Playfair, Hill, Columnar, substitution solver ด้วย quadgram annealing) + RSA attacks (**auto-detect ไฟล์ n/e/c**, small-e, Wiener, Fermat, PEM/DER parser, **integer-only iroot**) + XOR (single/multi-byte, flag-prefix crib, **wordlist-key crib** แบบ THCTT) + **hash identify/crack + flag-template** (`redactedCTF{<password>}` → เติมค่าที่ crack ได้) + **SHA-256 length extension attack** — เก็บ flag จาก **ทุก** ผล decode (ไม่ตัดด้วย ranking) |
 | 🌍 **Network** | nmap port scan (socket fallback), banner grabbing, **pure-Python pcap/pcapng analyzer** (TCP reassembly, HTTP extraction, flag hunt ใน UDP/ICMP exfil), DNS recon (records / zone transfer / subdomain brute) |
 
+### อัปเกรดล่าสุดสำหรับแลป
+
+- Web เพิ่ม JWT `alg=none`/public-key confusion/embedded-JWK probes, GraphQL alias batching, numeric REST IDOR, internal SSRF/header-routing probes, archive upload traversal และ race-flow probe
+- Crypto เพิ่ม structured JSON dispatcher สำหรับ RSA broadcast/common-modulus/CRT fault, ECDSA nonce reuse, DH/Pohlig–Hellman, LCG stream, matrix autokey และ Playfair artifacts
+- `lab_session.py` เลือกพอร์ต local จาก Colima เมื่อ API ส่ง vanity URL ที่เครื่องนี้เข้าถึงไม่ได้
+
 ---
 
 ## 📦 ติดตั้ง (Installation)
@@ -208,6 +214,7 @@ ctf-auto/
 python3 verify_vectors.py        # ตรวจ AES/ChaCha20/RC4/MT19937/RSA/classic/XOR/HLE กับ test vector มาตรฐาน
 python3 test_tctt_vectors.py     # ตรวจ decoder แบบ TCTT: base45/58/62+Bad62/36, Thai custom-base64,
                                  #   emoji (bits/offset/base100/subst), Ook!, Malbolge (Hello World)
+python3 -m unittest -q test_structured_crypto.py  # regression tests สำหรับ structured crypto attacks
 python3 test_login.py            # login brute-force กับ server จำลอง (NCSA + PIN 4 หลัก)
 python3 run_web_test.py          # รัน test server ใน thread + web scan จริง
 python3 run_chain_test.py        # ทดสอบ auto chain network -> web
