@@ -141,55 +141,6 @@ python3 web_app.py --port 9000  # custom port
 
 ---
 
-## 🔍 ตอนนี้แก้อะไรได้บ้าง (สรุปความสามารถ)
-
-### 🎯 ภาพรวม: แลปเทสจริง Web 14/14 + Crypto 14/14 disk-tested ผ่าน
-
-### 🌐 Web — 14 เทคนิคสแกน/เจาะอัตโนมัติ
-
-| # | เทคนิค | เจออะไร | แลปที่ผ่าน |
-|---|--------|--------|-----------|
-| 1 | **Recon** — headers, robots.txt, sitemap, tech stack | ข้อมูลเว็บ, path ที่ hint | ทุกแลป |
-| 2 | **Dirbust** — 545+ paths (threaded + keep-alive + 404-calibration) | hidden dir, flag.txt, .git/.env | idor-101, path-traversal |
-| 3 | **SQLi fuzz** — boolean/time/error/union | login bypass, data leak | sqli-101 |
-| 4 | **Blind SQLi extraction** — boolean oracle, extract ทีละตัวอักษร (parallel) | flag จาก DB โดยไม่เห็นผลลัพธ์ | blind-sqli |
-| 5 | **XSS / SSTI fuzz** | reflected payload | xss-reflected |
-| 6 | **LFI / path traversal** — ทุก payload + `/tmp/flag.txt` | อ่านไฟล์บน server | lfi-file-read, path-traversal |
-| 7 | **Command injection** — form + GET param | รันคำสั่งบน server | command-injection-basic |
-| 8 | **SSRF** — loopback / metadata / internal `/flag` | อ่าน service ภายใน | ssrf-basics |
-| 9 | **IDOR enum** — id=1,2,3... + path ids | ข้อมูล user อื่น | idor-101 |
-| 10 | **GraphQL introspection** — enumerate fields → query flag | flag จาก schema | graphql-introspection |
-| 11 | **Mass-assignment / NoSQLi** — `role:admin`, `$ne`/`$gt` | ขึ้นสิทธิ์ admin, bypass auth | mass-assignment, nosql-injection |
-| 12 | **Cookie forge** — base64-JSON → role=admin | ขึ้นสิทธิ์ | cookie-manipulation |
-| 13 | **AES-CTR bit-flip** — keystream จาก plaintext echo → forge cookie | ปลอม session | aes-ctr-bitflip |
-| 14 | **Login brute** — common creds + PIN 4 หลัก, JWT crack/forge, backup leak, 500 error leak, asset/JS crawl | credential, secret ใน script | file-upload-basic, ... |
-
-### 🔐 Crypto — ถอดได้ทุกรูปแบบ
-
-| กลุ่ม | ถอด/แก้ได้ |
-|------|-----------|
-| **Encoding** | base16/32/45/58/62/64/85, hex, binary, octal, decimal, morse, brainfuck, Ook!, Malbolge, ROT13/47, leet, gzip/zlib, custom-alphabet (Thai `ก-ฮ+๐-๙+0-9`, emoji base-100), base62 case-recovery (Bad62) |
-| **Chain ซ้อนหลายชั้น** | beam-search แตกทุกเส้นทาง — `base64(binary(hex))`, `b64(rot13(b64))`, `base85→base45→Malbolge` (TCTT 2025) — เก็บ flag จากทุกชั้น |
-| **Classic cipher** | Caesar, Vigenere (auto-key: sweep + flag-prefix crib + per-char), Affine, Atbash, Railfence, Bacon (0/1), Playfair, Hill, Columnar, substitution (quadgram annealing) |
-| **RSA** | auto-detect ไฟล์ n/e/c → small-e (cube root), Wiener (small d), Fermat (ใกล้กัน), **shared-prime** (gcd สองตัวเลข), PEM/DER parser, integer-only iroot |
-| **XOR** | single-byte brute, repeating-key (Kasiski + annealing), flag-prefix crib, wordlist-key crib (THCTT), **two-time-pad crib-drag** (OTP reuse — phrase-based, auto-recover key) |
-| **Hash** | identify (md5/sha1/sha256/...), wordlist crack + mutation, flag-template ต่อเอง (`redactedCTF{<password>}` → `redactedCTF{chocolate}`) |
-| **Modern** | AES (ECB/CBC), ChaCha20, RC4, MT19937 — solver + test vectors ในตัว |
-| **อื่นๆ** | **SHA-256 length extension** (forge MAC จาก (msg, mac) คู่เดียว), **KLG3 ledger solver** (SHA-256 + Base85 + XOR position-bound), **LCG custom cipher** (auto-detect + decrypt), payload หลัง label (`cipher:`/`cipher_hex:`) |
-
-### 🌍 Network / Forensics
-
-- **nmap port scan** (หรือ socket scan ในตัว), banner grabbing
-- **pcap/pcapng analyzer** — TCP reassembly, HTTP extraction, flag ใน UDP/ICMP exfil
-- **DNS recon** — records, zone transfer, subdomain brute (64 threads)
-
-### 🏁 Flag detection
-
-- รู้จัก prefix 150+ (FLAG{}, picoCTF{}, redacted{}, HTB{}, THCTT{}, scriptCTF{}, NCSA{}...) + generic fallback (จับ prefix อะไรก็ได้ที่มี `{...}`)
-- **wrap แบบไม่มีปีกกา**: `redactedCTFsecret` → `redactedCTF{secret}` (รวม lowercase-body variant: `SCRIPTCTFNOTWHATITSEEMS` → `scriptCTF{notwhatitseems}`)
-
----
-
 ## โครงสร้าง
 
 ```
@@ -219,48 +170,6 @@ python3 test_login.py            # login brute-force กับ server จำล�
 python3 run_web_test.py          # รัน test server ใน thread + web scan จริง
 python3 run_chain_test.py        # ทดสอบ auto chain network -> web
 ```
-
-## ผลลัพธ์จากการเทสกับแลปจริง
-
-**Crypto: 14/14 ผ่าน (disk-tested)**
-- rsa-small-e (`redactedCTF{small_e_cube_root_strikes_again}`)
-- rsa-wiener (`redactedCTF{wiener_attack_small_d}`)
-- rsa-mistake / shared-prime (`redactedCTF{shared_prime_is_a_fatal_flaw}`)
-- bacon-cipher (`scriptCTF{notwhatitseems}`)
-- vigenere-basic (`redactedCTF{vigenere_is_just_caesar_plus_key}`)
-- base64-trap (`redactedCTF{base64_is_not_encryption}`)
-- hash-crack (`redactedCTF{chocolate}`)
-- single-byte-xor (`redactedCTF{single_byte_xor_bruteforce}`)
-- repeating-xor (`redactedCTF{known_plaintext_beats_xor}`)
-- xor-reuse / two-time-pad (`redactedCTF{xor_key_reuse_crib_drag}`)
-- custom-cipher / LCG (`redactedCTF{lcg_keystream_is_weak}`)
-- brainfuck (`redactedCTF{brainfuck_esoteric_joy}`)
-- crypto-ledger-quorum / KLG3 (`redactedCTF{ledger_quorum_rejects_the_pretty_decoy}`)
-- xored-flag (`redactedCTF{read_the_checker_trace_the_xor}`)
-- hash-length-extension (forge MAC สำเร็จ, flag อยู่ฝั่ง server)
-
-**Web: 14/14 ผ่าน** — idor-101, file-upload-basic, cookie-manipulation,
-path-traversal, graphql-introspection, command-injection-basic, mass-assignment,
-sqli-101, xss-reflected, aes-ctr-bitflip, lfi-file-read, **blind-sqli**
-(boolean-oracle extraction), ssrf-basics, nosql-injection
-
-## 🇹🇭 แนวข้อ Thailand Cyber Top Talent (TCTT)
-
-Tool นี้ปรับตาม writeup TCTT หลายปี (2021-2025) — pattern ที่เจอบ่อยและวิธีใช้ tool:
-
-| ปี/หมวด | โจทย์ที่เจอ | วิธีใช้ tool |
-|--------|-----------|-------------|
-| 2025 Crypto | **Advanced Strings Secret** — base85 → base45 → **Malbolge** | `--category crypto --target file` → chain-decode แตกอัตโนมัติ + Malbolge interpreter ในตัว |
-| 2025 Crypto | **New Base64** — custom alphabet ภาษาไทย `ก-ฮ+๐-๙+0-9` (UTF-16, `==` pad) | custom-base decoder รู้จัก construction นี้ → ถอดได้เอง |
-| 2025 Crypto | **Bad62** — base62 ที่ alphabet โดน lowercase | base62 case-recovery: enumerate case variants ต่อ chunk + flag-body scoring |
-| 2024 Crypto | **emoBit** — 😺/😸 = binary → emoji → ลบ offset 0x1F3F7 | emoji solver: 2-state → bits → emoji-offset |
-| 2024 Crypto | **Easy1/2, Programming** — base32→base64 chain, hex+reverse, emoji substitution → md5 flag | chain-decode + emoji-subst (word-matching) |
-| 2024 Prog. | **XOR + wordlist** — key เป็นคำใน list, ผลมีคำนั้น | `xor-wordlist` crib: ลองทุกคำใน wordlist เป็น repeating key |
-| 2021 Web | **WebAccessControl** — login brute PIN 4 หลัก (username เริ่มต้น NCSA) | `login brute-force`: common creds + PIN 0000-9999 อัตโนมัติ |
-| 2022 Web | **Web-challenge04** — dirbust หา `/s/e/c/r/e/t/`, PHP `.inc` โชว์ secret | dirbust 545+ paths + backup/source leak checks |
-| 2021 Web | **WebSecretKey** — hidden directory + secret | dirbust + recon |
-
-Flag format ที่รู้จักแล้ว: `THCTT{...}`, `THCTT24{...}`, `THCTT2024{...}`, `tctt2022{...}`, `TCTT{...}`, `NCSA{...}`, `WTCTT{...}`
 
 ## 🎯 คู่มือใช้แข่ง CTF (ฉบับมือใหม่ → โปร)
 
