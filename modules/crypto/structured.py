@@ -15,6 +15,7 @@ import re
 from .common import long_to_bytes, strip_zeros
 from . import rsa
 from . import modern
+from core.flag import infer_prefixes
 
 
 def _int(value):
@@ -363,17 +364,20 @@ def _playfair_results(text):
     results = [("structured-playfair", decoded)]
     # A common static-challenge convention is a marker sentence whose tail
     # is the flag body (the prefix is omitted from the ciphertext).  Preserve
-    # the readable plaintext and also emit the lab's standard known prefix so
-    # the normal flag collector can verify it.
+    # the readable plaintext and only wrap it when the artifact explicitly
+    # tells us the competition prefix.  Never guess AegisCTF (or any other
+    # event) for an unknown lab.
     marker = re.search(r"(?:THE)?SECRETFLAGIS([A-Z0-9_]{6,})", decoded)
     if marker:
         body = marker.group(1)
-        results.append(("structured-playfair-flag", "AegisCTF{" + body + "}"))
-        # Playfair padding/formatting can leave a short terminal digraph;
-        # expose bounded suffix-trim candidates for the flag scorer.
-        for cut in range(1, min(4, len(body) - 5) + 1):
-            results.append(("structured-playfair-flag-trim",
-                            "AegisCTF{" + body[:-cut] + "}"))
+        prefixes = infer_prefixes(text)
+        for prefix in prefixes:
+            results.append(("structured-playfair-flag", prefix + body + "}"))
+            # Playfair padding/formatting can leave a short terminal digraph;
+            # expose bounded suffix-trim candidates for the flag scorer.
+            for cut in range(1, min(4, len(body) - 5) + 1):
+                results.append(("structured-playfair-flag-trim",
+                                prefix + body[:-cut] + "}"))
     return results
 
 

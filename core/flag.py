@@ -74,6 +74,52 @@ def extract_flags(text, include_candidates=True):
 # known prefixes sorted longest-first for brace-wrapping below
 _KNOWN_PREFIXES = sorted(set(_KNOWN.split("|")) - {""}, key=len, reverse=True)
 
+
+def known_prefixes():
+    """Return the built-in prefix vocabulary without braces.
+
+    Solvers can use this for cribs, but must not manufacture a flag with a
+    hard-coded competition prefix when the challenge did not provide one.
+    """
+    return tuple(_KNOWN_PREFIXES)
+
+
+def infer_prefixes(text):
+    """Infer flag prefixes explicitly present in an artifact or plaintext.
+
+    Supports both ``picoCTF{...}``-style examples and hints such as
+    ``flag_format: picoCTF{...}`` / ``prefix=HTB``.  Unknown prefixes are
+    accepted when the challenge states them explicitly.  An empty result is
+    intentional: callers should return a plaintext candidate instead of
+    guessing a competition's flag format.
+    """
+    if not text:
+        return []
+    found = []
+    seen = set()
+
+    def add(prefix):
+        prefix = (prefix or "").strip().strip("`'\"{}")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{2,30}", prefix):
+            return
+        key = prefix.lower()
+        if key not in seen:
+            seen.add(key)
+            found.append(prefix + "{")
+
+    # Any concrete braced flag, including an unknown event prefix, is the
+    # strongest format signal available in a writeup/artifact.
+    for match in re.finditer(r"(?<![A-Za-z0-9])([A-Za-z0-9_-]{2,30})\{", text):
+        add(match.group(1))
+
+    # Also understand metadata and prose commonly shipped with challenge
+    # files: prefix=..., flag format: ..., expected: PREFIX{...}.
+    for match in re.finditer(
+            r"(?im)\b(?:flag[_ -]?format|flag[_ -]?prefix|prefix|template|expected)"
+            r"\s*[:=]\s*([A-Za-z0-9_-]{2,30})", text):
+        add(match.group(1))
+    return found
+
 _PREFIX_WRAP_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9])(?:{_KNOWN})[A-Za-z0-9_]{{4,120}}"
 )

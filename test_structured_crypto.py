@@ -4,9 +4,17 @@ import json
 import unittest
 
 from modules.crypto import structured
+from core.flag import extract_flags, infer_prefixes
 
 
 class StructuredCryptoTests(unittest.TestCase):
+    def test_generic_flag_formats(self):
+        for prefix in ("picoCTF", "HTB", "THCTT", "customEvent"):
+            known, candidates = extract_flags(f"answer={prefix}{{works_here}}")
+            self.assertTrue(known or candidates, prefix)
+        self.assertEqual(infer_prefixes("flag_format: picoCTF{...}"), ["picoCTF{"])
+        self.assertEqual(infer_prefixes("prefix=customEvent"), ["customEvent{"])
+
     def test_autokey_matrix(self):
         alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         key = "KEY"

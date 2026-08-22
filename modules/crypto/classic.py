@@ -7,6 +7,7 @@ import re
 import string
 from collections import Counter
 
+from core import flag as flaglib
 from .common import (
     chi_square,
     ensure_model,
@@ -137,8 +138,8 @@ def _solve_vigenere_col(col):
     return best_shift
 
 
-_CRIBS = ("AegisCTF{", "AEGIS{", "aegis{", "FLAG{", "flag{", "picoCTF{",
-          "PicoCTF{", "HTB{", "CTF{", "ctf{", "DUCTF{", "N0PS{")
+_CRIBS = tuple(dict.fromkeys(
+    prefix + "{" for prefix in flaglib.known_prefixes()))
 
 
 def _decrypt_letters(letters, key):
