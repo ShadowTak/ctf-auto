@@ -10,6 +10,7 @@ from . import encodings
 from . import classic
 from . import hashes as hashes_mod
 from . import xor as xor_mod
+from . import structured as structured_mod
 from .common import score_candidates, text_score
 
 MAX_CANDIDATES = 25
@@ -40,6 +41,8 @@ def _rank(candidates):
 
 
 def _flag_hits(text):
+    if isinstance(text, bytes):
+        text = text.decode("latin-1", "replace")
     known, cands = flaglib.extract_flags(text)
     wrapped = flaglib.wrap_known_prefix(text)
     return known + cands + wrapped
@@ -130,6 +133,7 @@ def analyze_text(text):
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
         ("chain-decode", lambda: _chain_decode_job(text)),
+        ("structured", lambda: structured_mod.analyze(text)),
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
         ("length-ext", lambda: _length_ext_job(text)),
@@ -346,6 +350,19 @@ def analyze_file(path, as_binary=None):
         data = f.read()
     results = []
     flags = []
+
+    # Structured artifacts (JSON and labeled text) need their own attack
+    # dispatcher even in binary mode.  This is cheap for ordinary files and
+    # lets JSON crypto challenges work through the same public API.
+    try:
+        structured_results = structured_mod.analyze(data.decode("utf-8", errors="ignore"))
+        results.extend(structured_results)
+        for entry in structured_results:
+            for f in _flag_hits(entry[-1] if len(entry) >= 2 else entry):
+                if f not in flags:
+                    flags.append(f)
+    except Exception:
+        pass
 
     # strings + embedded flags
     try:

@@ -128,7 +128,12 @@ def instance_url(inst):
     """Build the player-facing URL for a lab instance.
     Endpoint DTO shape: {url, host, ports: [{name, internal, external, protocol}]}"""
     ep = inst.get("endpoint") or {}
-    if ep.get("url"):
+    # On macOS/Colima the worker may return a public vanity URL even though
+    # the published lab port is reachable locally.  Prefer the explicit
+    # host-port mapping for the default local runner; callers can opt into
+    # the API-provided URL with LAB_PUBLIC_HOST set to a non-local host.
+    local_host = PUBLIC_HOST in ("localhost", "127.0.0.1", "::1")
+    if ep.get("url") and not local_host:
         return ep["url"]
     host = ep.get("host") or PUBLIC_HOST
     for p in ep.get("ports", []):

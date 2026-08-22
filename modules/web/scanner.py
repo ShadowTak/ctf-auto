@@ -7,6 +7,7 @@ from core import httpx
 from core.flag import extract_flags
 from core.output import flag_line, info_line, ok_line, section, warn_line
 from . import assets as assets_mod
+from . import advanced as advanced_mod
 from . import backups as backups_mod
 from . import blind_sqli as blind_mod
 from . import cookies as cookies_mod
@@ -198,6 +199,11 @@ def run_web(target, interactive=False):
                     lines.append(f"    [*] token ที่ forge ได้: {res['forged'][:60]}...")
         return lines, list(dict.fromkeys(fl))
 
+    def phase_advanced():
+        endpoints = ep_200 + [base + "/" + p for p, _, _, _ in found]
+        findings, fl = advanced_mod.scan_advanced(base, endpoints)
+        return findings or ["  [!] ไม่พบ multi-step web exploit ที่ตอบ flag"], fl
+
     from core.parallel import run_concurrent
     phase_names = [
         ("── Deep interact (IDOR / form POST / endpoint fuzz) ──", phase_deep),
@@ -206,6 +212,7 @@ def run_web(target, interactive=False):
         ("── Injection fuzz (GET params / form fields) ──", phase_injections),
         ("── Login brute force ──", phase_login),
         ("── Cookies & JWT ──", phase_cookies),
+        ("── Advanced flows (JWT / GraphQL / SSRF / upload / race) ──", phase_advanced),
     ]
     results = run_concurrent(
         [fn for _, fn in phase_names], workers=len(phase_names),
