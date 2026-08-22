@@ -6,6 +6,7 @@ import itertools
 import math
 import re
 
+from core import flag as flaglib
 from .common import chi_square, is_printable_text
 
 
@@ -75,10 +76,7 @@ def _assemble(data, key):
 
 # Common CTF flag prefixes used as cribs for XOR key recovery
 FLAG_PREFIXES = [
-    b"flag{", b"FLAG{", b"Flag{", b"ctf{", b"CTF{", b"picoCTF{",
-    b"picoctf{", b"redactedCTF{", b"redacted{", b"redacted{", b"HTB{", b"THM{",
-    b"THCTT{", b"TCTT{", b"redacted{", b"CYBERHEROCTF{", b"CyberHeroCTF{",
-    b"cyberheroctf{", b"NCSA{", b"WPICTF{",
+    (prefix + "{").encode() for prefix in flaglib.known_prefixes()
 ]
 
 
