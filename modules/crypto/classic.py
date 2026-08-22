@@ -599,13 +599,381 @@ def try_all_classic(text):
     results.extend(solve_affine(text))
     cands = solve_vigenere(text)
     results.extend(cands)
+    # hill-climb booster: only when the quick solver produced nothing
+    # convincingly English (keeps the common path fast)
+    letters_hc = _norm(text)
+    if len(letters_hc) >= 10 and letters_hc.isalpha():
+        need_climb = True
+        for entry in cands:
+            dec = entry[-1]
+            if _english_fitness(dec) >= _GOOD_FITNESS:
+                need_climb = False
+                break
+        if need_climb and len(letters_hc) <= 400:
+            minus = lambda kk, vv: (vv - kk) % 26
+            hc_ranked = []
+            for keylen in _vigenere_keylen_candidates(letters_hc):
+                restarts = 6 if keylen <= 4 and len(letters_hc) <= 120 else (
+                    3 if len(letters_hc) <= 160 else 1)
+                kv, fit_, dec = periodic_hillclimb(
+                    letters_hc, minus, keylen, restarts=restarts)
+                hc_ranked.append(
+                    (fit_ - 0.06 * keylen,
+                     f"vigenere-hc key={''.join(str(k) for k in kv)}",
+                     dec))
+            hc_ranked.sort(key=lambda r: -r[0])
+            results.extend((lbl, dec) for _, lbl, dec in hc_ranked[:2])
+    results.extend(solve_beaufort_variants(text))
     results.extend(solve_railfence(text))
     cands = solve_columnar(text)
     results.extend(cands)
     if re.fullmatch(r"[abAB01\s]+", text):
         results.append(("bacon", dec_bacon(text)))
+    if re.fullmatch(r"[2-9\s]+", text) and len(text.strip()) >= 6:
+        results.append(("multitap-t9", dec_multitap(text)))
+    stripped = text.strip()
+    if re.fullmatch(r"[1-5\s]+", stripped) and \
+            len(re.sub(r"\s", "", stripped)) % 2 == 0 and \
+            len(stripped) >= 4:
+        results.append(("polybius", dec_polybius(stripped)))
+    letters = _norm(text)
+    if len(letters) >= 8:
+        for steps in (1, 2, -1, -2):
+            kb = keyboard_shift_decode(text, steps)
+            score = text_score(kb)
+            if score < 400:  # decent English-ish decode
+                results.append((f"keyboard-shift({steps:+d})", kb))
     try:
         results.extend(solve_substitution(text))
     except Exception:
         pass
     return results
+
+
+# ---------------------------------------------------------------------------
+# Beaufort / Variant Beaufort / Gronsfeld
+# ---------------------------------------------------------------------------
+def beaufort_decrypt(text, key):
+    """Beaufort: plain = key - cipher (mod 26); self-reciprocal in encrypt."""
+    return _shift_map(text, key, lambda kk, vv: (kk - vv) % 26)
+
+
+def variant_beaufort_decrypt(text, key):
+    """Variant Beaufort (encrypt = plain - key): plain = cipher + key."""
+    return _shift_map(text, key, lambda kk, vv: (vv + kk) % 26)
+
+
+def vigenere_family_decrypt(text, key):
+    """Classic Vigenere: plain = cipher - key."""
+    return _shift_map(text, key, lambda kk, vv: (vv - kk) % 26)
+
+
+def _shift_map(text, key, combine):
+    key_l = [ord(c.lower()) - 97 for c in re.sub(r"[^a-zA-Z]", "", key)]
+    if not key_l:
+        return text
+    out = []
+    ki = 0
+    for ch in text:
+        if ch.isalpha():
+            base = ord("A") if ch.isupper() else ord("a")
+            v = ord(ch.lower()) - 97
+            out.append(chr(combine(key_l[ki % len(key_l)], v) % 26 + base))
+            ki += 1
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _english_fitness(text):
+    """Higher = better English. Quadgram fitness when the model exists
+    (robust for unspaced letters), chi-square composite otherwise."""
+    from .common import load_quadgrams, quadgram_score
+    try:
+        load_quadgrams()
+        q = quadgram_score(text)
+        if q is not None:
+            return q / max(len(re.sub(r"[^a-zA-Z]", "", text)), 1)
+    except Exception:
+        pass
+    s = text_score(text)
+    return -s if s != float("inf") else -1e9
+
+
+def _neg_alpha(text):
+    """Map every letter c -> (26 - c) mod 26 preserving case/punctuation."""
+    out = []
+    for ch in text:
+        if ch.isalpha():
+            base = ord("A") if ch.isupper() else ord("a")
+            out.append(chr((26 - (ord(ch.lower()) - 97)) % 26 + base))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def solve_beaufort_variants(text):
+    """Auto-solve Beaufort / Variant Beaufort / Gronsfeld.
+
+    All three are periodic additive ciphers over the same algebra:
+      classic beaufort: P = K - C
+      variant-beaufort: P = C + K
+      gronsfeld:        P = C - K (digit keys)
+    so one quadgram hill-climb engine handles them all; the classic
+    Vigenere reduction through solve_vigenere adds crib-phase hits.
+    """
+    letters_only = _norm(text)
+    if len(letters_only) < 10 or not letters_only.isalpha():
+        return []
+
+    results = []
+    for entry in solve_vigenere(_neg_alpha(text)) or []:
+        results.append((f"beaufort via-vigenere {entry[1]}", entry[-1]))
+        break  # top hit only; dedicated climb below covers the rest
+
+    jobs = (("beaufort", lambda kk, vv: (kk - vv) % 26, False),
+            ("variant-beaufort", lambda kk, vv: (vv + kk) % 26, False),
+            ("gronsfeld", lambda kk, vv: (vv - kk) % 26, True))
+
+    for name, combine, digits_only in jobs:
+        ranked = []
+        for keylen in _vigenere_keylen_candidates(letters_only):
+            if keylen > len(letters_only):
+                continue
+            restarts = 6 if keylen <= 4 and len(letters_only) <= 120 else (
+                3 if len(letters_only) <= 160 else 1)
+            kv, fit_, dec = periodic_hillclimb(
+                letters_only, combine, keylen,
+                digits_only=digits_only, restarts=restarts)
+            # penalise long keys: a longer key can always mimic a shorter
+            # one (repetition) and tends to overfit quadgram fitness
+            label = f"{name} key={''.join(str(k) for k in kv)}"
+            ranked.append((fit_ - 0.06 * keylen, label, dec))
+        ranked.sort(key=lambda r: -r[0])
+        results.extend((lbl, dec) for _, lbl, dec in ranked[:2])
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Keyboard shift (QWERTY neighbour typing) + phone keypad multi-tap +
+# Polybius square — cheap decoders that cover a surprising number of misc
+# crypto challenges.
+# ---------------------------------------------------------------------------
+_KB_ROWS = ("1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./")
+
+
+def keyboard_shift_decode(text, steps=1):
+    """Map each character `steps` keys to the LEFT on a US QWERTY layout.
+
+    Decodes text typed with hands offset by one key (e.g. 'ypu;' -> 'hot '
+    style errors are handled per character).
+    """
+    pos = {}
+    for row in _KB_ROWS:
+        for ci, ch in enumerate(row):
+            pos[ch] = ci
+    out = []
+    for ch in text:
+        low = ch.lower()
+        if low in pos:
+            row = next(r for r in _KB_ROWS if low in r)
+            new = row[(pos[low] - steps) % len(row)]
+            out.append(new.upper() if ch.isupper() else new)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+_T9_MAP = {"2": "abc", "3": "def", "4": "ghi", "5": "jkl",
+           "6": "mno", "7": "pqrs", "8": "tuv", "9": "wxyz"}
+
+
+def dec_multitap(text):
+    """Old-phone multi-tap: '44 33 555 555 666' and '4433555 555666'
+    both decode to 'hello'.  Single spaces are letter separators; two or
+    more consecutive spaces become a real word break."""
+    out = []
+    for token in re.split(r"(\s+)", text.strip()):
+        if not token:
+            continue
+        if token.isspace():
+            out.append(" " if len(token) > 1 else "")
+            continue
+        i = 0
+        while i < len(token):
+            j = i
+            while j < len(token) and token[j] == token[i]:
+                j += 1
+            digit = token[i]
+            if digit in _T9_MAP:
+                letters = _T9_MAP[digit]
+                out.append(letters[(j - i - 1) % len(letters)])
+            else:
+                out.append(digit)
+            i = j
+    return "".join(out).strip()
+
+
+def dec_polybius(text):
+    """5x5 Polybius square (11..55, I/J merged) from digit pairs."""
+    digits = re.sub(r"[^1-5]", "", text)
+    if not digits or len(digits) % 2:
+        return text
+    alphabet = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+    return "".join(alphabet[(int(a) - 1) * 5 + int(b) - 1]
+                   for a, b in zip(digits[::2], digits[1::2]))
+
+
+# ---------------------------------------------------------------------------
+# Generic periodic-shift hill climber (Vigenere family workhorse)
+# ---------------------------------------------------------------------------
+_FIT_CACHE = {}
+
+
+def _cached_fitness(txt):
+    f = _FIT_CACHE.get(txt)
+    if f is None:
+        f = _english_fitness(txt)
+        if len(_FIT_CACHE) < 200_000:
+            _FIT_CACHE[txt] = f
+    return f
+
+
+_GOOD_FITNESS = -6.2   # per-letter quadgram; solid English territory
+
+
+def periodic_hillclimb(letters, combine, keylen, digits_only=False,
+                       restarts=4, rng=None):
+    """Recover a periodic additive key over `letters` (lowercase a-z only).
+
+    combine(key_val, cipher_val) -> plain_val.  Seeds each column by
+    chi-square, runs coordinate ascent on full-text quadgram fitness from
+    several randomized restarts, and stops early once a candidate reaches
+    clearly-English fitness.  Returns (key_vals, fitness, plaintext).
+    """
+    import random as _random
+    if rng is None:
+        rng = _random.Random(0x5EED + len(letters) * 31 + keylen * 7)
+    vals = [ord(c) - 97 for c in letters]
+    choices = list(range(10) if digits_only else range(26))
+
+    def decrypt(kv):
+        m = len(kv)
+        return "".join(chr(combine(kv[j % m], v) % 26 + 97)
+                       for j, v in enumerate(vals))
+
+    def col_seed():
+        kv = []
+        for i in range(keylen):
+            col = vals[i::keylen]
+            best, best_chi = 0, float("inf")
+            for k in choices:
+                d = "".join(chr(combine(k, v) % 26 + 97) for v in col)
+                c = chi_square(d)
+                if c < best_chi:
+                    best_chi, best = c, k
+            kv.append(best)
+        return kv
+
+    def ascend(kv):
+        kv = list(kv)
+        m = len(kv)
+        for _pass in range(6):
+            changed = False
+            for i in range(m):
+                saved = kv[i]
+                best_k, best_s = saved, _cached_fitness(decrypt(kv))
+                for k in choices:
+                    if k == saved:
+                        continue
+                    kv[i] = k
+                    s = _cached_fitness(decrypt(kv))
+                    if s > best_s:
+                        best_s, best_k = s, k
+                kv[i] = best_k
+                if best_k != saved:
+                    changed = True
+                    if best_s >= _GOOD_FITNESS:
+                        return kv
+            if not changed:
+                break
+        # coordinate ascent can stall on short/pathological texts (e.g.
+        # pangrams) — finish with a short simulated-annealing walk
+        import math as _math
+        cur_f = _cached_fitness(decrypt(kv))
+        best_kv, best_f = kv[:], cur_f
+        iters = 1200 if len(vals) <= 200 else 400
+        for it in range(iters):
+            temp = max(0.02, 1.8 * (1 - it / iters))
+            i = rng.randrange(m)
+            old = kv[i]
+            kv[i] = choices[(choices.index(old) +
+                             rng.choice((-3, -2, -1, 1, 2, 3))) % len(choices)]
+            f = _cached_fitness(decrypt(kv))
+            if f > cur_f or rng.random() < _math.exp((f - cur_f) / temp):
+                cur_f = f
+                if f > best_f:
+                    best_f = f
+                    best_kv = kv[:]
+                    if best_f >= _GOOD_FITNESS:
+                        return best_kv
+            else:
+                kv[i] = old
+        return best_kv
+
+    seeds = [col_seed()]
+    for _ in range(max(1, restarts)):
+        seeds.append([rng.choice(choices) for _ in range(keylen)])
+    best_kv, best_fit = None, -1e18
+    for seed in seeds:
+        kv = ascend(seed)
+        f = _cached_fitness(decrypt(kv))
+        if f > best_fit:
+            best_fit, best_kv = f, kv[:]
+            if best_fit >= _GOOD_FITNESS:
+                break
+    # short texts: hill-climbing starves on thin per-column signal, so
+    # brute-force the cross-product of each column's top-3 chi candidates
+    if best_fit < _GOOD_FITNESS and len(vals) <= 140 and keylen <= 6:
+        col_cands = []
+        for i in range(keylen):
+            col = vals[i::keylen]
+            scored = []
+            for k in choices:
+                d = "".join(chr(combine(k, v) % 26 + 97) for v in col)
+                scored.append((chi_square(d), k))
+            scored.sort()
+            col_cands.append([k for _, k in scored[:3]])
+        tried = 0
+        import itertools as _it
+        for combo in _it.product(*col_cands):
+            f = _cached_fitness(decrypt(list(combo)))
+            if f > best_fit:
+                best_fit, best_kv = f, list(combo)
+                if best_fit >= _GOOD_FITNESS:
+                    break
+            tried += 1
+            if tried > 900:
+                break
+    return best_kv, best_fit, decrypt(best_kv)
+
+
+def _vigenere_keylen_candidates(letters):
+    probe = _norm_upper(letters)
+    out = set()
+    try:
+        out.add(int(_best_keylen_ic(
+            probe, max_len=min(20, max(2, len(probe) // 3)))))
+    except Exception:
+        pass
+    kas = _kasiski_keylen(probe)
+    if kas:
+        out.add(int(kas))
+    limit = min(10, max(2, len(letters) // 2))
+    if len(letters) <= 160:
+        out.update(range(1, limit))
+    else:
+        for extra in (out.copy()):
+            out.add(min(20, extra + 1))
+            out.add(max(1, extra - 1))
+    return sorted(k for k in out if 1 <= k <= max(2, len(letters)))

@@ -66,43 +66,55 @@ def _expand_key(key):
     for i in range(nk, 4 * (nr + 1)):
         t = w[i - 1]
         if i % nk == 0:
-            t = _sub_word(_rot_word(t)) ^ (_RCON[i // nk] << 24)
+            # rcon for round i//nk is x^((i//nk)-1) -> _RCON[i//nk - 1]
+            t = _sub_word(_rot_word(t)) ^ (_RCON[i // nk - 1] << 24)
         elif nk > 6 and i % nk == 4:
             t = _sub_word(t)
         w.append(w[i - nk] ^ t)
     return nr, [int.to_bytes(x, 4, "big") for x in w]
 
 
-def _add_round_key(state, rk):
-    for i in range(4):
-        state[i] ^= rk[i]
+def _add_round_key(state, rk_words):
+    """XOR one full round key (FOUR consecutive words) into the state.
+
+    The historical bug here applied only the first word of every round
+    key — silent corruption that pycryptodome's presence always masked.
+    """
+    for c in range(4):
+        word = rk_words[c]
+        for r in range(4):
+            state[4 * c + r] ^= word[r]
+
+
+def _round_key(rk, rnd):
+    return rk[rnd * 4:rnd * 4 + 4]
 
 
 def _encrypt_block(block, nr, rk):
     state = list(block)
-    _add_round_key(state, rk[0])
+    _add_round_key(state, _round_key(rk, 0))
     for rnd in range(1, nr):
         state = [_SBOX[b] for b in state]
         state = _shift_rows(state, forward=True)
         state = _mix_columns(state, forward=True)
-        _add_round_key(state, rk[rnd])
+        _add_round_key(state, _round_key(rk, rnd))
     state = [_SBOX[b] for b in state]
     state = _shift_rows(state, forward=True)
-    _add_round_key(state, rk[nr])
+    _add_round_key(state, _round_key(rk, nr))
     return bytes(state)
 
 
 def _decrypt_block(block, nr, rk):
     state = list(block)
-    _add_round_key(state, rk[nr])
+    _add_round_key(state, _round_key(rk, nr))
     state = _shift_rows(state, forward=False)
     state = [_INV_SBOX[b] for b in state]
     for rnd in range(nr - 1, 0, -1):
-        _add_round_key(state, rk[rnd])
+        _add_round_key(state, _round_key(rk, rnd))
         state = _mix_columns(state, forward=False)
         state = _shift_rows(state, forward=False)
         state = [_INV_SBOX[b] for b in state]
-    _add_round_key(state, rk[0])
+    _add_round_key(state, _round_key(rk, 0))
     return bytes(state)
 
 
@@ -155,29 +167,34 @@ def _pkcs7_unpad(data):
 
 
 def aes_ecb(data, key, decrypt=True):
-    """AES-128/192/256 ECB. encrypt() pads with PKCS7, decrypt() unpads
-    when padding is valid."""
+    """AES-128/192/256 ECB. encrypt() pads with PKCS7 only when the input
+    is not block-aligned (identical behaviour to the pycryptodome path);
+    decrypt() strips valid padding and passes raw bytes through otherwise."""
     if len(key) not in (16, 24, 32):
         raise ValueError("AES key must be 16/24/32 bytes")
     if _HAS_PYCRYPTODOME:
         if decrypt:
             return _pkcs7_unpad(_PyAES.new(key, _PyAES.MODE_ECB).decrypt(data))
-        data = data if len(data) % 16 == 0 else _pkcs7_pad(data)
-        return _PyAES.new(key, _PyAES.MODE_ECB).encrypt(data)
+        return _PyAES.new(key, _PyAES.MODE_ECB).encrypt(
+            _pkcs7_pad_maybe(data))
     nr, rk = _expand_key(key)
     if decrypt:
-        data = data if len(data) % 16 == 0 else _pkcs7_pad(data)
         out = b"".join(_decrypt_block(data[i:i + 16], nr, rk)
-                       for i in range(0, len(data), 16))
+                       for i in range(0, len(data) - len(data) % 16, 16))
         return _pkcs7_unpad(out)
-    data = _pkcs7_pad(data)
+    data = _pkcs7_pad_maybe(data)
     return b"".join(_encrypt_block(data[i:i + 16], nr, rk)
                     for i in range(0, len(data), 16))
 
 
+def _pkcs7_pad_maybe(data):
+    """Pad only when needed — keeps encrypt() length-stable for aligned
+    inputs exactly like the pycryptodome codepath."""
+    return data if len(data) % 16 == 0 else _pkcs7_pad(data)
+
+
 def aes_cbc(data, key, iv, decrypt=True):
-    """AES-128/192/256 CBC. encrypt() pads with PKCS7, decrypt() unpads
-    when padding is valid."""
+    """AES-128/192/256 CBC. Same padding contract as aes_ecb()."""
     if len(key) not in (16, 24, 32):
         raise ValueError("AES key must be 16/24/32 bytes")
     if len(iv) != 16:
@@ -185,19 +202,19 @@ def aes_cbc(data, key, iv, decrypt=True):
     if _HAS_PYCRYPTODOME:
         if decrypt:
             return _pkcs7_unpad(_PyAES.new(key, _PyAES.MODE_CBC, iv).decrypt(data))
-        data = data if len(data) % 16 == 0 else _pkcs7_pad(data)
-        return _PyAES.new(key, _PyAES.MODE_CBC, iv).encrypt(data)
+        return _PyAES.new(key, _PyAES.MODE_CBC, iv).encrypt(
+            _pkcs7_pad_maybe(data))
     nr, rk = _expand_key(key)
     if decrypt:
-        data = data if len(data) % 16 == 0 else _pkcs7_pad(data)
         prev = iv
         out = bytearray()
-        for i in range(0, len(data), 16):
+        usable = len(data) - len(data) % 16
+        for i in range(0, usable, 16):
             block = _decrypt_block(data[i:i + 16], nr, rk)
             out.extend(bytes(a ^ b for a, b in zip(block, prev)))
             prev = data[i:i + 16]
         return _pkcs7_unpad(bytes(out))
-    data = _pkcs7_pad(data)
+    data = _pkcs7_pad_maybe(data)
     prev = iv
     out = bytearray()
     for i in range(0, len(data), 16):

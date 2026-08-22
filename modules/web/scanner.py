@@ -12,6 +12,7 @@ from . import backups as backups_mod
 from . import blind_sqli as blind_mod
 from . import cookies as cookies_mod
 from . import ctr_bitflip as ctr_mod
+from . import deser as deser_mod
 from . import directories as dirs_mod
 from . import errors as errors_mod
 from . import graphql as graphql_mod
@@ -197,6 +198,15 @@ def run_web(target, interactive=False):
                     lines.append(f"    [!] {issue}")
                 if res.get("secret"):
                     lines.append(f"    [*] token ที่ forge ได้: {res['forged'][:60]}...")
+        # deserialization probes over every cookie value (pickle/PHP blobs)
+        try:
+            samples = {c["name"]: c["value"] for c in cookies}
+            deser_find, deser_flags = deser_mod.scan_deserialization(
+                base, None, [base], sample_values=samples)
+            lines += deser_find
+            fl += deser_flags
+        except Exception as exc:
+            lines.append(f"  [!] deser probe error: {exc}")
         return lines, list(dict.fromkeys(fl))
 
     def phase_advanced():

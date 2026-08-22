@@ -11,10 +11,13 @@ import base64
 import hashlib
 import json
 import re
+import struct
 
 from .common import long_to_bytes, strip_zeros
 from . import rsa
 from . import modern
+from . import ecc
+from . import blockciphers
 from core.flag import infer_prefixes
 
 
@@ -381,6 +384,64 @@ def _playfair_results(text):
     return results
 
 
+def _ecdlp_results(obj):
+    """Elliptic-curve artifacts: solve Q = d*G then derive the flag key.
+
+    Tries the common key-derivation conventions CTFs use:
+    sha256(str(d)), sha256(bytes(d)), sha256(str(x of d*Q)), etc.
+    """
+    out = []
+    for mapping in _walk(obj):
+        def gi(*names):
+            for name in names:
+                value = _int(_get(mapping, name))
+                if value is not None:
+                    return value
+            return None
+        p = gi("p", "field_prime")
+        a = gi("a")
+        b = gi("b")
+        gx, gy = gi("gx", "g_x"), gi("gy", "g_y")
+        qx = gi("qx", "q_x", "pubx", "public_x")
+        qy = gi("qy", "q_y", "puby", "public_y")
+        if not (p and a is not None and b is not None and gx and gy
+                and qx and qy):
+            continue
+        G, Q = (gx % p, gy % p), (qx % p, qy % p)
+        try:
+            label, d = ecc.solve_ecdlp(G, Q, a % p, b % p, p)
+        except Exception:
+            continue
+        if d is None:
+            continue
+        out.append(("ecc-" + label, f"d = {d}  (Q = d*G verified)"))
+        enc = _bytes(_get(mapping, "encrypted_flag_hex", "ciphertext_hex",
+                          "flag_ciphertext"))
+        if not enc:
+            continue
+        import hashlib as _hashlib
+        shared_x = (d * qx) % p  # common convention: k*Q shares x-coord
+
+        def _int_bytes(v):
+            return v.to_bytes((v.bit_length() + 7) // 8 or 1, "big")
+        key_candidates = [
+            ("sha256(str(d))", _hashlib.sha256(str(d).encode()).digest()),
+            ("sha256(be(d))", _hashlib.sha256(_int_bytes(d)).digest()),
+            ("sha256(str(x_dQ))",
+             _hashlib.sha256(str(shared_x).encode()).digest()),
+            ("sha256(be(x_dQ))",
+             _hashlib.sha256(_int_bytes(shared_x)).digest()),
+            ("raw-d-be32", d.to_bytes(32, "big")),
+        ]
+        for key_label, key in key_candidates:
+            if not key:
+                continue
+            plain = bytes(byte ^ key[i % len(key)]
+                          for i, byte in enumerate(enc))
+            out.append((f"ecc-{label}-flag[{key_label}]", plain))
+    return out
+
+
 def analyze(text):
     """Return solver-style results from JSON or labeled structured text."""
     if not text or not text.strip():
@@ -392,10 +453,48 @@ def analyze(text):
         results.extend(_ecdsa_results(obj))
         results.extend(_lcg_results(obj))
         results.extend(_stream_reuse_results(obj))
-        results.extend(_mt_results(obj))
         results.extend(_dh_results(obj))
         results.extend(_autokey_results(obj))
+        results.extend(_mt_results(obj))
+        results.extend(_ecdlp_results(obj))
+        # block cipher payloads shipped as JSON ({algorithm,key,ciphertext})
+        results.extend(_blockcipher_results(obj))
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
     results.extend(_playfair_results(text))
     return results
+
+
+def _blockcipher_results(obj):
+    """TEA/XTEA/XXTEA payloads declared inside structured artifacts."""
+    out = []
+    for mapping in _walk(obj):
+        alg = _get(mapping, "algorithm", "cipher")
+        key_field = _get(mapping, "key", "key_hex")
+        ct = _bytes(_get(mapping, "ciphertext", "ct", "encrypted_flag",
+                         "encrypted_flag_hex"))
+        if not (isinstance(alg, str) and isinstance(key_field, str) and ct):
+            continue
+        alg_l = alg.lower()
+        if alg_l not in ("tea", "xtea", "xxtea"):
+            continue
+        try:
+            key_int = int(key_field.strip().replace("_", ""), 0)
+        except ValueError:
+            continue
+        key = key_int.to_bytes(16, "big") or None
+        if key is None or len(key) != 16:
+            continue
+        plain = None
+        if alg_l == "xxtea":
+            plain = blockciphers.xxtea_decrypt(ct, key)
+        elif len(ct) % 8 == 0:
+            kw = list(struct.unpack("<4I", key))
+            fn = (blockciphers.tea_decrypt_block if alg_l == "tea"
+                  else blockciphers.xtea_decrypt_block)
+            plain = b"".join(
+                struct.pack("<2I", *fn(*struct.unpack_from("<2I", ct, i), kw))
+                for i in range(0, len(ct), 8))
+        if plain:
+            out.append((f"structured-{alg_l}", plain))
+    return out

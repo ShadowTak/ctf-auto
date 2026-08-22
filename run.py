@@ -466,12 +466,36 @@ def main():
                         help="หมวดที่ต้องการรัน")
     parser.add_argument("--module", help="โมดูลเดี่ยว (เช่น jwt)")
     parser.add_argument("--target", help="URL / host / path ไฟล์ / ข้อความ")
+    parser.add_argument("--header", action="append", default=[],
+                        metavar='"K: V"',
+                        help="header เพิ่มทุก request (ใส่ซ้ำได้) — "
+                             'เช่น --header "Authorization: Bearer x"')
+    parser.add_argument("--cookie", metavar='"k1=v1; k2=v2"',
+                        help="cookie session สำหรับโจทย์ที่ต้อง login ก่อน")
+    parser.add_argument("--proxy", metavar="http://127.0.0.1:8080",
+                        help="route traffic ผ่าน proxy (เช่น Burp)")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="timeout ต่อ request (วินาที)")
+    parser.add_argument("--user-agent", default=None,
+                        help="override User-Agent")
     parser.add_argument("--auto-lab", nargs="?", const="all", default=None,
                         choices=["web", "crypto", "all"],
                         help="สแกนแลปใน stack อัตโนมัติ (web / crypto / all)")
     parser.add_argument("--limit", type=int, default=None,
                         help="จำกัดจำนวนแลปที่สแกน (ใช้กับ --auto-lab)")
     args = parser.parse_args()
+
+    from core import httpx as _httpx
+    headers = {}
+    for raw in args.header or []:
+        k, _, v = raw.partition(":")
+        if k.strip():
+            headers[k.strip()] = v.strip()
+    if headers or args.cookie or args.proxy or args.timeout or args.user_agent:
+        _httpx.configure(headers=headers or None, cookie=args.cookie,
+                         proxy=args.proxy, timeout=args.timeout,
+                         user_agent=args.user_agent)
+
     if args.auto_lab:
         import autolab
         autolab.auto_lab(category=args.auto_lab, limit=args.limit)
