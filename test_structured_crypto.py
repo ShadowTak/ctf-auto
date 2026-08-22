@@ -1,4 +1,5 @@
 """Small regression tests for JSON/labeled crypto attack dispatch."""
+import base64
 import json
 import unittest
 
@@ -44,6 +45,33 @@ class StructuredCryptoTests(unittest.TestCase):
                "encrypted_flag_hex": bytes(encrypted).hex()}
         results = structured.analyze(json.dumps(obj))
         self.assertIn(("structured-lcg", plain), results)
+
+    def test_stream_nonce_reuse_base64(self):
+        known = b"known plaintext for keystream"
+        target = b"AegisCTF{stream_nonce_reuse}"
+        keystream = bytes(range(1, 80))
+        obj = {
+            "known_plaintext": base64.b64encode(known).decode(),
+            "known_ciphertext": base64.b64encode(
+                bytes(a ^ b for a, b in zip(known, keystream))).decode(),
+            "target_ciphertext": base64.b64encode(
+                bytes(a ^ b for a, b in zip(target, keystream))).decode(),
+        }
+        results = structured.analyze(json.dumps(obj))
+        self.assertIn(("structured-stream-nonce-reuse", target), results)
+
+    def test_mt19937_stream(self):
+        from modules.crypto.modern import MT19937
+
+        seed = 0x12345678
+        source = MT19937(seed=seed)
+        samples = [source.next_u32() for _ in range(624)]
+        plain = b"AegisCTF{mt_clone}"
+        encrypted = bytes(byte ^ (source.next_u32() & 0xff) for byte in plain)
+        obj = {"mt_outputs": samples,
+               "encrypted_flag_hex": encrypted.hex()}
+        results = structured.analyze(json.dumps(obj))
+        self.assertIn(("structured-mt19937-stream", plain), results)
 
 
 if __name__ == "__main__":

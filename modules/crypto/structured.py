@@ -7,12 +7,14 @@ an LCG.  This module keeps those attacks generic: it discovers the usual
 field names, validates the recovered plaintext, and returns normal solver
 results to the existing flag collector.
 """
+import base64
 import hashlib
 import json
 import re
 
 from .common import long_to_bytes, strip_zeros
 from . import rsa
+from . import modern
 
 
 def _int(value):
@@ -44,6 +46,15 @@ def _bytes(value):
         if re.fullmatch(r"[0-9a-fA-F]+", value) and len(value) % 2 == 0:
             return bytes.fromhex(value)
     except ValueError:
+        pass
+    # Challenge artifacts frequently mix hex and base64 fields.  Only try
+    # base64 after the hex path so a hexadecimal-looking value stays stable.
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = base64.b64decode(padded, validate=True)
+        if decoded:
+            return decoded
+    except (ValueError, base64.binascii.Error):
         pass
     return None
 
@@ -203,6 +214,58 @@ def _lcg_results(obj):
     return out
 
 
+def _xor_bytes(left, right):
+    return bytes(a ^ b for a, b in zip(left, right))
+
+
+def _stream_reuse_results(obj):
+    """Recover plaintext when a stream/CTR/GCM nonce was reused.
+
+    A common CTF artifact gives one known plaintext/ciphertext pair and a
+    second ciphertext encrypted with the same keystream.  This is also the
+    useful first step of many AES-GCM nonce-reuse challenges: ciphertexts
+    share the stream even though the authentication tags need separate work.
+    """
+    out = []
+    for mapping in _walk(obj):
+        known_plain = _bytes(_get(mapping, "known_plaintext", "known_message",
+                                  "plaintext", "message"))
+        known_cipher = _bytes(_get(mapping, "known_ciphertext",
+                                   "known_ct", "ciphertext1", "ct1"))
+        target_cipher = _bytes(_get(mapping, "target_ciphertext",
+                                    "flag_ciphertext", "ciphertext2", "ct2",
+                                    "encrypted_flag", "encrypted_flag_hex"))
+        if not known_plain or not known_cipher or not target_cipher:
+            continue
+        keystream = _xor_bytes(known_plain, known_cipher)
+        if not keystream:
+            continue
+        recovered = _xor_bytes(target_cipher, keystream)
+        out.append(("structured-stream-nonce-reuse", recovered))
+    return out
+
+
+def _mt_results(obj):
+    """Clone MT19937 from 624 outputs and decrypt a byte-wise stream."""
+    out = []
+    for mapping in _walk(obj):
+        samples = _get(mapping, "mt_outputs", "random_outputs", "outputs")
+        enc = _bytes(_get(mapping, "encrypted_flag", "encrypted_flag_hex",
+                           "ciphertext", "ciphertext_hex"))
+        if not (isinstance(samples, list) and len(samples) >= modern.MT_N and enc):
+            continue
+        vals = [_int(x) for x in samples[:modern.MT_N]]
+        if any(x is None for x in vals):
+            continue
+        try:
+            rng = modern.clone_mt19937(vals)
+            plain = bytes(byte ^ (rng.next_u32() & 0xff) for byte in enc)
+            out.append(("structured-mt19937-stream", plain))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def _dh_results(obj):
     out = []
     for mapping in _walk(obj):
@@ -324,6 +387,8 @@ def analyze(text):
         results.extend(_rsa_results(obj))
         results.extend(_ecdsa_results(obj))
         results.extend(_lcg_results(obj))
+        results.extend(_stream_reuse_results(obj))
+        results.extend(_mt_results(obj))
         results.extend(_dh_results(obj))
         results.extend(_autokey_results(obj))
     except (ValueError, TypeError, json.JSONDecodeError):
