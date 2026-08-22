@@ -1,6 +1,11 @@
 """Fast stdlib HTTP client with a per-thread keep-alive connection pool.
 Reusing connections makes dirbusting/fuzzing several times faster than
-opening a fresh TCP+TLS handshake per request (the old urllib approach)."""
+opening a fresh TCP+TLS handshake per request (the old urllib approach).
+
+Also supports competition-quality session controls: global headers /
+cookies applied to every request (for authenticated targets) and an HTTP
+proxy (absolute-URI form for http, CONNECT tunnel for https).
+"""
 import gzip
 import http.client
 import re
@@ -22,6 +27,54 @@ _CTX.verify_mode = ssl.CERT_NONE
 
 _TIMEOUT = 10
 _MAX_REDIRECTS = 5
+
+# Session-wide settings configured via configure() / run.py CLI flags
+_GLOBAL_HEADERS = {}
+_PROXY_URL = None
+
+
+def configure(headers=None, cookie=None, proxy=None, timeout=None,
+              user_agent=None):
+    """Set session-wide defaults used by every request.
+
+    headers : dict merged under per-call headers
+    cookie  : "k1=v1; k2=v2" shorthand for the Cookie header
+    proxy   : "http://127.0.0.1:8080" (http via absolute-URI, https via
+              CONNECT tunnel)
+    timeout : default per-request timeout
+    """
+    global _PROXY_URL
+    if user_agent:
+        _GLOBAL_HEADERS["User-Agent"] = user_agent
+    if headers:
+        _GLOBAL_HEADERS.update({str(k): str(v) for k, v in headers.items()})
+    if cookie:
+        _GLOBAL_HEADERS["Cookie"] = cookie.strip()
+    if timeout:
+        global _TIMEOUT
+        _TIMEOUT = max(1, int(timeout))
+        _POOL.timeout = _TIMEOUT
+    if proxy:
+        proxy = proxy.strip()
+        if not re.match(r"^https?://", proxy, re.I):
+            proxy = "http://" + proxy
+        _PROXY_URL = proxy
+    elif proxy is not None:  # explicit empty string clears it
+        _PROXY_URL = None
+
+
+def reset_session():
+    """Clear cookies/headers/proxy (used between scans)."""
+    global _PROXY_URL
+    _GLOBAL_HEADERS.clear()
+    _PROXY_URL = None
+
+
+def _proxy_parts():
+    if not _PROXY_URL:
+        return None
+    p = urllib.parse.urlparse(_PROXY_URL)
+    return p.hostname, p.port or 80
 
 
 class Resp:
@@ -57,10 +110,20 @@ class _ConnPool:
 
     def get(self, scheme, host, port):
         conns = self._conns()
-        key = (scheme, host, port)
+        proxy = _proxy_parts()
+        key = (scheme, host, port, bool(proxy))
         conn = conns.get(key)
         if conn is None:
-            if scheme == "https":
+            if proxy:
+                phost, pport = proxy
+                if scheme == "https":
+                    conn = http.client.HTTPSConnection(
+                        phost, pport, timeout=self.timeout, context=_CTX)
+                    conn.set_tunnel(host, port)
+                else:
+                    conn = http.client.HTTPConnection(
+                        phost, pport, timeout=self.timeout)
+            elif scheme == "https":
                 conn = http.client.HTTPSConnection(
                     host, port, timeout=self.timeout, context=_CTX)
             else:
@@ -70,7 +133,9 @@ class _ConnPool:
         return conn
 
     def evict(self, scheme, host, port):
-        conn = self._conns().pop((scheme, host, port), None)
+        proxy = _proxy_parts()
+        key = (scheme, host, port, bool(proxy))
+        conn = self._conns().pop(key, None)
         if conn is not None:
             try:
                 conn.close()
@@ -115,11 +180,19 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
     if parsed.query:
         path += "?" + parsed.query
 
-    hdrs = dict(headers or {})
+    proxy = _proxy_parts()
+    # through a plain-HTTP proxy the request-target is the absolute URI
+    request_target = f"{scheme}://{host}:{port}{path}" if (
+        proxy and scheme == "http") else path
+
+    hdrs = dict(_GLOBAL_HEADERS)
+    hdrs.update({str(k): str(v) for k, v in (headers or {}).items()})
     hdrs.setdefault("User-Agent", UA)
     hdrs.setdefault("Accept", "*/*")
     hdrs.setdefault("Accept-Encoding", "gzip, deflate")
     hdrs.setdefault("Connection", "keep-alive")
+    if proxy and "Host" not in {k.lower() for k in hdrs}:
+        hdrs["Host"] = host
 
     conn = _POOL.get(scheme, host, port)
     # stale keep-alive connections (server closed, proxy RST, half-open) are
@@ -127,7 +200,7 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
     # times before giving up
     for attempt in range(3):
         try:
-            conn.request(method, path, body=data, headers=hdrs)
+            conn.request(method, request_target, body=data, headers=hdrs)
             resp = conn.getresponse()
             body = resp.read()
             r_headers = {k.lower(): v for k, v in resp.getheaders()}

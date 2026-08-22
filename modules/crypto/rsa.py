@@ -305,4 +305,22 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None)
         except Exception:
             pass
 
+    # 6) generic factoring ladder (trial / fermat / p-1 / rho / FactorDB)
+    if not any(label.startswith("factor") for label, _ in found):
+        try:
+            from .factoring import factor_n
+            primes = [x for x in factor_n(n) if x > 1]
+            prod = 1
+            for prime in primes:
+                prod *= prime
+            phi_n = 1
+            for prime in primes:
+                phi_n *= prime - 1
+            if primes and prod == n and math.gcd(e, phi_n) == 1:
+                dd = invmod(e, phi_n)
+                found.append(("factor",
+                              strip_zeros(long_to_bytes(pow(c, dd, n)))))
+        except Exception:
+            pass
+
     return found

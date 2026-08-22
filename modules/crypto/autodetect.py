@@ -107,6 +107,93 @@ def _labeled_payloads(text):
     return out
 
 
+def _fernet_job(text):
+    """Fernet token detection + wordlist key brute."""
+    try:
+        from . import blockciphers
+        from .common import looks_like_encoding as _enc
+    except ImportError:
+        return []
+    out = []
+    for tok in re.findall(r"gAAAA[A-Za-z0-9_\-]{40,}", text):
+        hit = blockciphers.crack_fernet(tok, _wordlist_candidates())
+        if hit:
+            plain, key = hit
+            out.append((f"fernet-cracked key={key!r}",
+                        plain.decode("utf-8", "replace")))
+    return out
+
+
+def _wordlist_candidates():
+    """Shared wordlist for brute jobs (env ROCKYOU or bundled defaults)."""
+    path = os.environ.get("ROCKYOU")
+    words = ["password", "secret", "secret_key", "changeme", "supersecret",
+             "letmein", "welcome", "admin", "ctf", "flag"]
+    if path and os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                for i, line in enumerate(fh):
+                    if i >= 200_000:
+                        break
+                    words.append(line.rstrip("\r\n"))
+        except Exception:
+            pass
+    return words
+
+
+def _prng_job(text):
+    """Predict-the-next challenges: recover java/glibc PRNGs from observed
+    integer sequences found in the artifact."""
+    from . import prng as prng_mod
+
+    out = []
+
+    def _int_list(m):
+        return [int(x) for x in re.findall(r"-?\d+", m.group(1))]
+
+    # java: consecutive nextInt() outputs
+    m = re.search(
+        r"(?is)(?:java|nextInt|next_int)[^\[]{0,80}[\[=]\s*([\d\s,\n]{6,400})",
+        text)
+    if m:
+        vals = _int_list(m)
+        for i in range(len(vals) - 2):
+            seed = prng_mod.java_recover(vals[i], vals[i + 1])
+            if seed is None:
+                continue
+            jr = prng_mod.JavaRandom(seed)
+            replay = [jr.next_int() for _ in range(i, len(vals))]
+            if replay != [v & 0xFFFFFFFF for v in vals[i:]]:
+                break
+            nxt = [jr.next_int() for _ in range(3)]
+            out.append(("java-random-recovered",
+                        f"seed={seed} next={nxt}"))
+            break
+
+    # glibc: srand seed + outputs
+    m = re.search(r"(?is)srand\s*[=(]\s*(\d+)", text)
+    mo = re.search(
+        r"(?is)(?:outputs?|random(?:_numbers)?)[^\[]{0,60}[\[=:]\s*"
+        r"([\d\s,\n]{6,400})", text)
+    if mo:
+        vals = _int_list(mo)
+        seed = int(m.group(1)) if m else None
+        if seed is not None:
+            stream = prng_mod.glibc_rand_stream(seed, min(len(vals), 8))
+            if stream == [v & 0x7FFFFFFF for v in vals[:len(stream)]]:
+                pred = prng_mod.glibc_rand_stream(seed, len(vals) + 3)
+                out.append(("glibc-rand",
+                            f"srand({seed}) verified; next="
+                            f"{pred[len(vals):len(vals)+3]}"))
+        else:
+            got_seed, predict = prng_mod.glibc_seed_brute(vals)
+            if got_seed is not None:
+                out.append(("glibc-rand-brute",
+                            f"srand({got_seed}) matches; "
+                            f"next={predict(3)}"))
+    return out
+
+
 def analyze_text(text):
     """Run every solver; return ranked results and flags found."""
     if not text or not text.strip():
@@ -137,6 +224,8 @@ def analyze_text(text):
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
         ("length-ext", lambda: _length_ext_job(text)),
+        ("fernet", lambda: _fernet_job(text)),
+        ("prng", lambda: _prng_job(text)),
         ("xor", lambda: xor_mod.crack_xor(text)),
     ] + jobs_extra
     # Bacon's cipher is a 5-bit grouping over 0/1 (or A/B) — a binary-
