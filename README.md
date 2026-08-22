@@ -12,7 +12,8 @@
 ### อัปเกรดล่าสุดสำหรับแลป
 
 - Web เพิ่ม JWT `alg=none`/public-key confusion/embedded-JWK probes, GraphQL alias batching, numeric REST IDOR, internal SSRF/header-routing probes, archive upload traversal และ race-flow probe
-- Crypto เพิ่ม structured JSON dispatcher สำหรับ RSA broadcast/common-modulus/CRT fault, ECDSA nonce reuse, DH/Pohlig–Hellman, LCG stream, matrix autokey และ Playfair artifacts
+- Web เพิ่ม XXE external-entity probe, JSON prototype-pollution follow-up และ CORS sensitive-endpoint check
+- Crypto เพิ่ม structured JSON dispatcher สำหรับ RSA broadcast/common-modulus/CRT fault, ECDSA nonce reuse, DH/Pohlig–Hellman, LCG stream, stream/CTR/GCM nonce-reuse recovery, matrix autokey และ Playfair artifacts
 - `lab_session.py` เลือกพอร์ต local จาก Colima เมื่อ API ส่ง vanity URL ที่เครื่องนี้เข้าถึงไม่ได้
 
 ---
