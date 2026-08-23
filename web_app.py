@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, request, jsonify, render_template, send_from_directory
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
 # ── in-memory job store ───────────────────────────────────────────────────────
 _jobs = {}   # job_id → {status, results, started, finished, error}
@@ -103,6 +104,37 @@ def _run_crypto(jid, text=None, filepath=None):
             for f in (flags or []):
                 results.append({"type": "flag", "flag": f})
             results.append({"type": "file", "path": os.path.basename(filepath)})
+        _finish_job(jid, results)
+    except Exception as e:
+        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+
+def _run_image(jid, filepath):
+    try:
+        from modules.image.forensics import analyze_image
+        report = analyze_image(filepath)
+        results = [{"type": "file", "path": report["file"]["name"]},
+                   {"type": "image", "section": "format", "data": json.dumps(
+                       {"format": report["format"], "summary": report["summary"],
+                        "file": report["file"]}, ensure_ascii=False)}]
+        for section_name in ("metadata", "chunks", "anomalies", "text", "strings",
+                             "stego", "signatures", "decodes", "tools"):
+            values = report.get(section_name)
+            if values:
+                results.append({"type": "image", "section": section_name,
+                                "data": json.dumps(values, ensure_ascii=False,
+                                                     default=str)})
+        for finding in report.get("findings", []):
+            if finding.get("kind") == "verified":
+                results.append({"type": "flag", "flag": finding["value"],
+                                "status": "verified", "confidence": finding.get("confidence"),
+                                "source": finding.get("source"),
+                                "evidence": finding.get("evidence", [])})
+            elif finding.get("kind") == "candidate":
+                results.append({"type": "candidate", "value": finding["value"],
+                                "confidence": finding.get("confidence"),
+                                "source": finding.get("source"),
+                                "evidence": finding.get("evidence", [])})
         _finish_job(jid, results)
     except Exception as e:
         _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
@@ -224,6 +256,14 @@ def api_scan():
         t = threading.Thread(target=_run_network, args=(jid, file_path), daemon=True)
         t.start()
 
+    elif category in ("image", "picture", "pic"):
+        file_path = data.get("file_path")
+        if not file_path or not os.path.isfile(file_path):
+            _finish_job(jid, [], error="No image uploaded")
+            return jsonify({"job_id": jid})
+        t = threading.Thread(target=_run_image, args=(jid, file_path), daemon=True)
+        t.start()
+
     else:
         _finish_job(jid, [], error=f"Unknown category: {category}")
         return jsonify({"job_id": jid})
@@ -236,9 +276,12 @@ def api_upload():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
-    tmp = os.path.join(tempfile.gettempdir(), f"ctfweb_{f.filename}")
+    original = os.path.basename(f.filename or "upload.bin")
+    suffix = os.path.splitext(original)[1][:16]
+    fd, tmp = tempfile.mkstemp(prefix="ctfweb_", suffix=suffix)
+    os.close(fd)
     f.save(tmp)
-    return jsonify({"file_path": tmp, "filename": f.filename})
+    return jsonify({"file_path": tmp, "filename": original})
 
 
 @app.route("/api/status/<jid>")

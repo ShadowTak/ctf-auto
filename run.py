@@ -6,6 +6,7 @@ Usage:
     python3 run.py --category web --target http://host:8080
     python3 run.py --category crypto --target "encoded text or /path/file"
     python3 run.py --category network --target 10.10.10.5|capture.pcap
+    python3 run.py --category image --target suspicious.png
     python3 run.py --category full --target 10.10.10.5
     python3 run.py --module jwt --target <token>
 """
@@ -63,6 +64,11 @@ def run_crypto(target):
 def run_network(target):
     from modules.network.scanner import run_network as _run
     return _run(target, chain_to_web=run_web)
+
+
+def run_image(target):
+    from modules.image.forensics import run_image as _run
+    return _run(target)
 
 
 def run_full(target):
@@ -305,6 +311,7 @@ def main_menu():
         "4": ("⚡ Auto Full", "network -> web chain อัตโนมัติทั้งสาย"),
         "5": ("⚡ Auto Lab", "สแกนแลปใน stack อัตโนมัติ (web/crypto)"),
         "6": ("โหมดละเอียด (เลือกโมดูล)", "เลือกโมดูลย่อยทีละตัว"),
+        "7": ("🖼️ Image forensics", "EXIF / strings / stego / QR / OCR / embedded files"),
         "9": ("About / วิธีใช้", "รายละเอียดการใช้งาน"),
     }
     print_menu("MAIN MENU", items)
@@ -366,6 +373,12 @@ def submenu_network():
     run_network_module(choice, target)
 
 
+def submenu_image():
+    target = input_target("path ไฟล์ภาพ (png/jpg/gif/bmp/webp/tiff):")
+    if target:
+        run_image(target)
+
+
 def about():
     section("ABOUT")
     print("""
@@ -377,6 +390,7 @@ def about():
     python3 run.py --category web --target http://target:8080
     python3 run.py --category network --target 10.10.10.5
     python3 run.py --category network --target capture.pcap
+    python3 run.py --category image --target suspicious.png
     python3 run.py --category full --target 10.10.10.5
     python3 run.py --module jwt --target <token>
   environment:
@@ -397,6 +411,8 @@ def dispatch(args):
         flags = run_crypto(args.target)
     elif args.category == "network":
         flags = run_network(args.target)
+    elif args.category in ("image", "picture", "pic"):
+        flags = run_image(args.target)
     elif args.category == "full":
         flags = run_full(args.target)
     elif args.module == "jwt":
@@ -443,6 +459,8 @@ def dispatch(args):
                     submenu_crypto()
                 elif sub.lower() in ("n", "network"):
                     submenu_network()
+            elif choice == "7":
+                submenu_image()
             elif choice == "9":
                 about()
             else:
@@ -462,7 +480,7 @@ def dispatch(args):
 
 def main():
     parser = argparse.ArgumentParser(description="CTF Auto Recon & Solver")
-    parser.add_argument("--category", choices=["web", "crypto", "network", "full"],
+    parser.add_argument("--category", choices=["web", "crypto", "network", "image", "picture", "pic", "full"],
                         help="หมวดที่ต้องการรัน")
     parser.add_argument("--module", help="โมดูลเดี่ยว (เช่น jwt)")
     parser.add_argument("--target", help="URL / host / path ไฟล์ / ข้อความ")

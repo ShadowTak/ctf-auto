@@ -4,3 +4,4 @@ sympy>=1.12
 fpylll>=0.6
 playwright>=1.40
 requests>=2.31
+Pillow>=10.0

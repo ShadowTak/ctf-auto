@@ -36,9 +36,13 @@ def detect_capabilities():
         _module("fpylll", "fpylll lattice backend"),
         _module("playwright", "Playwright browser automation"),
         _module("requests", "Requests HTTP backend"),
+        _module("PIL", "Pillow image pixel backend"),
     ]
     for name, command in (("nmap", "nmap"), ("tshark", "tshark"),
-                          ("curl", "curl")):
+                          ("curl", "curl"), ("exiftool", "exiftool"),
+                          ("tesseract", "tesseract"), ("zbarimg", "zbarimg"),
+                          ("steghide", "steghide"), ("zsteg", "zsteg"),
+                          ("binwalk", "binwalk"), ("identify", "identify")):
         found = shutil.which(command)
         result.append(Capability(name, bool(found),
                                   f"{command} at {found}" if found else

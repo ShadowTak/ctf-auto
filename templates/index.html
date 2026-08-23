@@ -236,6 +236,9 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
     <div class="tab" data-tab="network" onclick="switchTab('network')">
       <span class="icon">🌍</span> Network
     </div>
+    <div class="tab" data-tab="image" onclick="switchTab('image')">
+      <span class="icon">🖼️</span> Image
+    </div>
   </div>
 
   <!-- ── Web Panel ─────────────────────────────────────────── -->
@@ -297,6 +300,29 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
     </p>
   </div>
 
+  <!-- ── Image Panel ───────────────────────────────────────── -->
+  <div class="panel" id="panel-image">
+    <div class="panel-title"><span class="dot dot-net"></span> Image Forensics / Stego
+    </div>
+    <div class="input-group">
+      <label>Upload image artifact</label>
+      <div class="file-drop" id="image-drop">
+        <input type="file" id="image-file" onchange="handleFile(this,'image')"
+               accept="image/*,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,.ico,.pnm">
+        <span class="icon">🔎</span>
+        <span>Drop image here or click to browse</span>
+        <span class="name" id="image-filename"></span>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <button class="btn btn-primary" onclick="runScan('image')">▶ Deep analyze</button>
+    </div>
+    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
+      EXIF/XMP/PNG chunks, comments, strings, UTF-16, QR/OCR, LSB bit planes,
+      polyglot signatures, embedded files and automatic decode candidates
+    </p>
+  </div>
+
   <!-- ── Results ───────────────────────────────────────────── -->
   <div id="results">
     <div class="results-header">
@@ -328,7 +354,8 @@ function switchTab(tab) {
 function handleFile(input, category) {
   const file = input.files[0];
   if (!file) return;
-  const nameEl = document.getElementById(category === 'crypto' ? 'crypto-filename' : 'net-filename');
+  const nameEl = document.getElementById(category === 'crypto' ? 'crypto-filename' :
+    category === 'image' ? 'image-filename' : 'net-filename');
   nameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
 
   // Upload to server
@@ -366,6 +393,9 @@ function runScan(category) {
   } else if (category === 'network') {
     if (!uploadedFiles.network) return alert('Upload a pcap file');
     body.file_path = uploadedFiles.network;
+  } else if (category === 'image') {
+    if (!uploadedFiles.image) return alert('Upload an image file');
+    body.file_path = uploadedFiles.image;
   }
 
   // Show results panel
@@ -450,6 +480,11 @@ function renderResults(data) {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-net">NET</span>${r.section ? ' ' + escHtml(r.section) : ''}</div>
         <div class="value">${escHtml((r.data || '').substring(0, 600))}</div>
+      </div>`;
+    } else if (r.type === 'image') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-scan">IMAGE</span> ${escHtml(r.section || '')}</div>
+        <pre class="value" style="white-space:pre-wrap;max-height:420px;overflow:auto">${escHtml((r.data || '').substring(0, 12000))}</pre>
       </div>`;
     } else if (r.type === 'target') {
       html += `<div class="r-item">

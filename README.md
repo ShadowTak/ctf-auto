@@ -31,6 +31,14 @@
 - **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
 - **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
 
+**Image forensics เพิ่มใหม่**
+
+- `python3 run.py --category image --target suspicious.png` (ใช้ `picture` หรือ `pic` ก็ได้)
+- ตรวจ magic/file-type mismatch, hash/entropy, PNG/JPEG/GIF/BMP/WebP/TIFF metadata, EXIF/XMP/comments/chunks, ASCII/UTF-16 strings, trailing/polyglot signatures และ raw embedded text
+- ถอด candidate ที่เป็น base/hex/Unicode/chain ต่อจากข้อความในภาพ พร้อมแยก `VERIFIED` / `CANDIDATE` / raw decode ตามหลักฐาน
+- ลอง LSB bit-plane จาก PNG/BMP และใช้ `exiftool`, `identify`, `strings`, `zbarimg`, `tesseract`, `steghide`, `zsteg`, `binwalk` เมื่อเครื่องมี โดยจะรายงานเครื่องมือที่ใช้และ output ดิบ
+- Web UI มีแท็บ **Image** สำหรับอัปโหลดและดูผลแบบละเอียด; ไฟล์อัปโหลดถูกตั้งชื่อชั่วคราวแบบสุ่ม ไม่ใช้ชื่อไฟล์จากผู้ใช้เป็น path ตรงๆ
+
 **Web เพิ่มใหม่**
 - **Session controls**: `--cookie "k=v"`, `--header "K: V"` (ใส่ซ้ำได้), `--proxy http://127.0.0.1:8080`, `--timeout`, `--user-agent` — scan โจทย์ที่ต้อง login ก่อน / ผ่าน Burp ได้
 - **UNION-based SQLi automation**: หา param -> นับ column (ORDER BY sweep) -> หา echo column -> exfil version/tables/flag columns + time-based blind probe
