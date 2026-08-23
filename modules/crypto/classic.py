@@ -6,6 +6,7 @@ import math
 import re
 import string
 from collections import Counter
+from functools import lru_cache
 
 from core import flag as flaglib
 from .common import (
@@ -589,7 +590,7 @@ def solve_substitution(text, iterations=None):
     return [(f"substitution (score={best_overall_score:.2f})", plain)]
 
 
-def try_all_classic(text):
+def _try_all_classic_uncached(text):
     """Run every classic solver family CONCURRENTLY (they are independent
     pure functions) and merge their candidates."""
     from core.parallel import run_concurrent
@@ -655,11 +656,9 @@ def try_all_classic(text):
     jobs = [
         ("── caesar/affine/atbash ──", job_quick),
         ("── vigenere ──", job_vigenere),
-        ("── beaufort family ──", job_beaufort),
         ("── railfence/columnar ──", job_transpositions),
         ("── patterns ──", job_patterns),
         ("── keyboard ──", job_keyboard),
-        ("── substitution ──", job_substitution),
     ]
     results = []
     outputs = run_concurrent([_safe(fn) for _, fn in jobs],
@@ -672,13 +671,31 @@ def try_all_classic(text):
     # hill-climb booster for vigenere: only when nothing convincingly
     # English came out of the parallel pass
     if len(letters_hc) >= 10 and letters_hc.isalpha():
-        need_climb = True
-        for entry in results:
-            dec = entry[-1]
-            if isinstance(dec, str) and _english_fitness(dec) >= _GOOD_FITNESS:
-                need_climb = False
-                break
+        def has_good_english(items):
+            return any(
+                isinstance(entry[-1], str) and
+                _english_fitness(entry[-1]) >= _GOOD_FITNESS
+                for entry in items
+            )
+
+        need_climb = not has_good_english(results)
+        # Short inputs are noisy, so a slightly relaxed threshold avoids
+        # launching Beaufort/substitution annealing after an obvious cheap
+        # Caesar/Vigenere hit (the common fast path).
+        if need_climb and len(letters_hc) < 40:
+            need_climb = not any(
+                isinstance(entry[-1], str) and
+                _english_fitness(entry[-1]) >= -11.5
+                for entry in results
+            )
         if need_climb and len(letters_hc) <= 400:
+            results.extend(list(job_beaufort()))
+            need_climb = not has_good_english(results)
+        if need_climb and len(letters_hc) <= 400:
+            # Substitution annealing is the most expensive classic path.
+            # Keep it for hard cases, but do not pay for it when a cheap
+            # family already produced solid English.
+            results.extend(list(solve_substitution(text)))
             minus = lambda kk, vv: (vv - kk) % 26
             hc_ranked = []
             for keylen in _vigenere_keylen_candidates(letters_hc):
@@ -694,6 +711,18 @@ def try_all_classic(text):
             results.extend((lbl, dec) for _, lbl, dec in hc_ranked[:2])
     return results
     return results
+
+
+@lru_cache(maxsize=64)
+def _try_all_classic_cached(text):
+    return tuple(_try_all_classic_uncached(text))
+
+
+def try_all_classic(text):
+    """Run classic solvers with a bounded cache for repeated artifacts."""
+    if not isinstance(text, str) or len(text) > 10_000:
+        return _try_all_classic_uncached(text)
+    return list(_try_all_classic_cached(text))
 
 
 # ---------------------------------------------------------------------------

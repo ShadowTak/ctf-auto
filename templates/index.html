@@ -560,26 +560,31 @@ function pollJob(jid) {
 
 function stopScan() {
   if (!activeJobId || stopRequested) return;
+  const jid = activeJobId;
   stopRequested = true;
   const button = document.getElementById('stop-btn');
   button.disabled = true;
   button.textContent = '■ Stopping…';
-  setJobStatus('STOP REQUESTED // scanner will exit at a safe cancellation point', 'stopping');
-  fetch('/api/stop/' + activeJobId, { method: 'POST' })
+  // Stop the UI immediately; the backend request interrupts active sockets
+  // and cancels queued workers in parallel.
+  if (polling) { clearInterval(polling); polling = null; }
+  activeJobId = null;
+  button.hidden = true;
+  document.getElementById('spinner').hidden = true;
+  document.getElementById('results-title').textContent = '■ Scan stopped';
+  document.getElementById('results-body').innerHTML =
+    '<div class="empty"><span class="icon">■</span>Stop sent — active work was cancelled immediately.</div>';
+  document.getElementById('summary').innerHTML = '';
+  setJobStatus('CANCELLED // stop sent immediately; partial results discarded from view', 'cancelled');
+  fetch('/api/stop/' + jid, { method: 'POST' })
     .then(r => r.json())
     .then(d => {
       if (!d.accepted && !['stopping', 'cancelled'].includes(d.status)) {
-        button.disabled = false;
-        button.textContent = '■ Stop';
-        stopRequested = false;
-        setJobStatus('RUNNING // stop request was not accepted', 'running');
+        setJobStatus('WARNING // backend did not accept stop request', 'stopping');
       }
     })
     .catch(() => {
-      button.disabled = false;
-      button.textContent = '■ Stop';
-      stopRequested = false;
-      setJobStatus('RUNNING // stop request failed; retry available', 'running');
+      setJobStatus('WARNING // stop request could not reach backend', 'stopping');
     });
 }
 

@@ -16,7 +16,8 @@ def pmap(func, items, workers=32, desc="", timeout=None):
     workers = max(1, min(workers, len(items)))
     progress = Progress(len(items), desc=desc)
     results = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {}
         for it in items:
             if cancelled():
@@ -32,6 +33,9 @@ def pmap(func, items, workers=32, desc="", timeout=None):
             if cancelled():
                 for pending in futures:
                     pending.cancel()
+                break
+    finally:
+        pool.shutdown(wait=not cancelled(), cancel_futures=True)
     progress.finish()
     return results
 
@@ -42,7 +46,8 @@ def run_concurrent(funcs, workers=16, desc=""):
         return []
     progress = Progress(len(funcs), desc=desc)
     results = [None] * len(funcs)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {}
         for i, fn in enumerate(funcs):
             if cancelled():
@@ -58,5 +63,8 @@ def run_concurrent(funcs, workers=16, desc=""):
             if cancelled():
                 for pending in futures:
                     pending.cancel()
+                break
+    finally:
+        pool.shutdown(wait=not cancelled(), cancel_futures=True)
     progress.finish()
     return results

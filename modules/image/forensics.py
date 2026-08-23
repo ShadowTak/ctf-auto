@@ -633,6 +633,7 @@ def _decode_texts(texts, ledger):
     # Direct strings are evidence; only encoded-looking snippets go through
     # the expensive crypto pipeline, keeping image scans bounded and useful.
     candidates = []
+    seen_values = set()
     for source, value in texts:
         value = _text(value).strip()
         if not value or len(value) < 4:
@@ -645,7 +646,9 @@ def _decode_texts(texts, ledger):
         if len(value) <= 5000 and (re.fullmatch(r"[A-Za-z0-9+/=_-]{8,}", value) or
                                    re.fullmatch(r"[0-9a-fA-F :,-]{8,}", value) or
                                    "\\" in value or "  " in value):
-            candidates.append((source, value))
+            if value not in seen_values:
+                seen_values.add(value)
+                candidates.append((source, value))
     for source, value in candidates[:14]:
         try:
             ranked, findings = analyze_text_evidence(value)

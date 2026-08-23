@@ -10,6 +10,7 @@ import re
 import struct
 import urllib.parse
 import zlib
+from functools import lru_cache
 
 from .common import is_printable_text
 
@@ -1443,7 +1444,7 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
 # ---------------------------------------------------------------------------
 # Public "run all encodings" — used by autodetect
 # ---------------------------------------------------------------------------
-def try_all_encodings(text):
+def _try_all_encodings_uncached(text):
     """Returns list of (label, decoded_text). Decoders run in parallel —
     they are pure functions, so a thread pool cuts wall time to the slowest
     single decoder instead of the sum."""
@@ -1508,3 +1509,16 @@ def try_all_encodings(text):
     except Exception:
         pass
     return results
+
+
+@lru_cache(maxsize=128)
+def _try_all_encodings_cached(text):
+    """Cache pure decode work reused by autodetect and image forensics."""
+    return tuple(_try_all_encodings_uncached(text))
+
+
+def try_all_encodings(text):
+    """Return decodes, reusing results for duplicate artifact strings."""
+    if not isinstance(text, str) or len(text) > 100_000:
+        return _try_all_encodings_uncached(text)
+    return list(_try_all_encodings_cached(text))

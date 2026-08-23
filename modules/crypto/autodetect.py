@@ -3,6 +3,7 @@ ranks the outputs by English-ness and flag-ness, and prints the best hits."""
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 
 from core import flag as flaglib
 from core.evidence import EvidenceLedger, decode_trace
@@ -164,12 +165,11 @@ def _fernet_job(text):
     return out
 
 
-def _wordlist_candidates():
-    """Shared wordlist for brute jobs (env ROCKYOU or bundled defaults)."""
-    path = os.environ.get("ROCKYOU")
+@lru_cache(maxsize=8)
+def _load_wordlist(path, mtime_ns):
     words = ["password", "secret", "secret_key", "changeme", "supersecret",
              "letmein", "welcome", "admin", "ctf", "flag"]
-    if path and os.path.isfile(path):
+    if path:
         try:
             with open(path, encoding="utf-8", errors="ignore") as fh:
                 for i, line in enumerate(fh):
@@ -178,7 +178,17 @@ def _wordlist_candidates():
                     words.append(line.rstrip("\r\n"))
         except Exception:
             pass
-    return words
+    return tuple(words)
+
+
+def _wordlist_candidates():
+    """Shared wordlist for brute jobs (env ROCKYOU or bundled defaults)."""
+    path = os.environ.get("ROCKYOU", "")
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns if path else 0
+    except OSError:
+        mtime_ns = 0
+    return _load_wordlist(path, mtime_ns)
 
 
 def _prng_job(text):
@@ -234,10 +244,14 @@ def _prng_job(text):
     return out
 
 
-def analyze_text(text):
+def _analyze_text_uncached(text):
     """Run every solver; return ranked results and flags found."""
     if not text or not text.strip():
         return [], []
+    stripped = text.strip()
+    direct_flags, _ = flaglib.extract_flags(stripped, include_candidates=False)
+    if direct_flags and stripped == direct_flags[0]:
+        return [(0.0, "direct", stripped)], direct_flags
 
     from .common import looks_like_encoding
 
@@ -399,6 +413,20 @@ def analyze_text(text):
     return ranked, _filter_flag_families(all_flags)
 
 
+@lru_cache(maxsize=64)
+def _analyze_text_cached(text):
+    ranked, flags = _analyze_text_uncached(text)
+    return tuple(ranked), tuple(flags)
+
+
+def analyze_text(text):
+    """Cached public wrapper; return fresh lists for compatibility."""
+    if not isinstance(text, str) or len(text) > 100_000:
+        return _analyze_text_uncached(text)
+    ranked, flags = _analyze_text_cached(text)
+    return list(ranked), list(flags)
+
+
 def analyze_text_evidence(text):
     """Analyze text and return rich findings without changing the legacy API.
 
@@ -479,6 +507,9 @@ def _chain_decode_job(text):
     try:
         for i, (name, cur) in enumerate(encodings.chain_decode(text), 1):
             out.append((f"chain[{i}]={name}", cur))
+        if any(flaglib.extract_flags(item[-1], include_candidates=False)[0]
+               for item in out if len(item) >= 2):
+            return out
     except Exception:
         pass
     try:

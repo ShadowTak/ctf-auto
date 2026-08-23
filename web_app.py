@@ -315,6 +315,7 @@ def api_status(jid):
 @app.route("/api/stop/<jid>", methods=["POST"])
 def api_stop(jid):
     """Request cooperative cancellation for a running scan."""
+    from core.cancel import stop_event
     with _lock:
         job = _jobs.get(jid)
         if not job:
@@ -323,7 +324,7 @@ def api_stop(jid):
             return jsonify({"status": job["status"], "accepted": False})
         job["stop_requested"] = True
         job["status"] = "stopping"
-        job["cancel"].set()
+        stop_event(job["cancel"])
         return jsonify({"status": "stopping", "accepted": True})
 
 

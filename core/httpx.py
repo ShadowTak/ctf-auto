@@ -18,7 +18,8 @@ import urllib.parse
 import zlib
 from http.cookies import SimpleCookie
 
-from .cancel import cancelled
+from .cancel import (cancelled, register_connection,
+                     unregister_connection)
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -306,38 +307,44 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
         hdrs["Host"] = host
 
     conn = _POOL.get(scheme, host, port)
+    register_connection(conn)
     # stale keep-alive connections (server closed, proxy RST, half-open) are
     # common under burst load — evict and retry with a fresh connection a few
     # times before giving up
-    for attempt in range(3):
-        if cancelled():
-            return None
-        try:
-            conn.request(method, request_target, body=data, headers=hdrs)
-            resp = conn.getresponse()
-            body = resp.read()
-            raw_headers = resp.getheaders()
-            r_headers = {}
-            set_cookies = []
-            for key, value in raw_headers:
-                low_key = key.lower()
-                if low_key == "set-cookie":
-                    set_cookies.append(value)
-                else:
-                    r_headers[low_key] = value
-            if set_cookies:
-                r_headers["set-cookie"] = "\n".join(set_cookies)
-                for set_cookie in set_cookies:
-                    _store_set_cookie(set_cookie)
-            body = _decompress(body, r_headers)
-            _learn_auth(body, r_headers)
-            return Resp(resp.status, r_headers, body, url, reason=resp.reason)
-        except (http.client.HTTPException, OSError, socket.timeout,
-                ssl.SSLError, ValueError):
-            _POOL.evict(scheme, host, port)
-            if attempt < 2 and not cancelled():
-                conn = _POOL.get(scheme, host, port)
-                time.sleep(0.05 * (attempt + 1))
+    try:
+        for attempt in range(3):
+            if cancelled():
+                return None
+            try:
+                conn.request(method, request_target, body=data, headers=hdrs)
+                resp = conn.getresponse()
+                body = resp.read()
+                raw_headers = resp.getheaders()
+                r_headers = {}
+                set_cookies = []
+                for key, value in raw_headers:
+                    low_key = key.lower()
+                    if low_key == "set-cookie":
+                        set_cookies.append(value)
+                    else:
+                        r_headers[low_key] = value
+                if set_cookies:
+                    r_headers["set-cookie"] = "\n".join(set_cookies)
+                    for set_cookie in set_cookies:
+                        _store_set_cookie(set_cookie)
+                body = _decompress(body, r_headers)
+                _learn_auth(body, r_headers)
+                return Resp(resp.status, r_headers, body, url, reason=resp.reason)
+            except (http.client.HTTPException, OSError, socket.timeout,
+                    ssl.SSLError, ValueError):
+                _POOL.evict(scheme, host, port)
+                if attempt < 2 and not cancelled():
+                    unregister_connection(conn)
+                    conn = _POOL.get(scheme, host, port)
+                    register_connection(conn)
+                    time.sleep(0.05 * (attempt + 1))
+    finally:
+        unregister_connection(conn)
     return None
 
 
