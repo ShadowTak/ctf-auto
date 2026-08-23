@@ -104,7 +104,39 @@ def _rsa_results(obj):
         p = _int(_get(mapping, "p"))
         q = _int(_get(mapping, "q"))
         n2 = _int(_get(mapping, "n2"))
-        if n and e and c:
+        specialized = False
+
+        # Shared-prime records often use n1/n2 instead of a single n. Solve
+        # this before the generic RSA ladder, which would otherwise try to
+        # factor a 1024-bit modulus for several minutes.
+        n1 = _int(_get(mapping, "n1"))
+        n2_pair = _int(_get(mapping, "n2"))
+        if n1 and n2_pair and e and c is not None:
+            try:
+                shared_results = rsa.shared_prime_attack(n1, n2_pair, e, c)
+                for label, pt in shared_results:
+                    out.append(("structured-rsa-" + label, pt))
+                specialized = bool(shared_results)
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        # Bellcore / CRT fault: gcd(valid - faulty, n) reveals a prime. Do
+        # this before crack_rsa for the same reason as the shared-prime path.
+        valid = _int(_get(mapping, "valid_signature", "valid_sig", "signature"))
+        faulty = _int(_get(mapping, "faulty_signature", "faulty_sig", "fault_signature"))
+        encrypted = _int(_get(mapping, "encrypted_flag", "encrypted_flag_int"))
+        if n and e and valid is not None and faulty is not None and encrypted is not None:
+            try:
+                shared = __import__("math").gcd(abs(valid - faulty), n)
+                if 1 < shared < n:
+                    other = n // shared
+                    d = pow(e, -1, (shared - 1) * (other - 1))
+                    out.append(("structured-rsa-crt-fault", _plain(pow(encrypted, d, n))))
+                    specialized = True
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        if n and e and c and not specialized:
             for label, pt in rsa.crack_rsa(n=n, e=e, c=c, p=p, q=q, n2=n2):
                 out.append(("structured-rsa-" + label, pt))
 
@@ -134,20 +166,6 @@ def _rsa_results(obj):
                 m = rsa.common_modulus(c1, c2, e1, e2, n)
                 if m is not None:
                     out.append(("structured-rsa-common-modulus", _plain(m)))
-            except (ValueError, ZeroDivisionError):
-                pass
-
-        # Bellcore / CRT fault: gcd(valid - faulty, n) reveals a prime.
-        valid = _int(_get(mapping, "valid_signature", "valid_sig", "signature"))
-        faulty = _int(_get(mapping, "faulty_signature", "faulty_sig", "fault_signature"))
-        encrypted = _int(_get(mapping, "encrypted_flag", "encrypted_flag_int"))
-        if n and e and valid is not None and faulty is not None and encrypted is not None:
-            try:
-                shared = __import__("math").gcd(abs(valid - faulty), n)
-                if 1 < shared < n:
-                    other = n // shared
-                    d = pow(e, -1, (shared - 1) * (other - 1))
-                    out.append(("structured-rsa-crt-fault", _plain(pow(encrypted, d, n))))
             except (ValueError, ZeroDivisionError):
                 pass
 

@@ -135,6 +135,14 @@ def _try_rsa_params(text):
     return results
 
 
+def _prefix_cribs(prefix_hint):
+    """Turn explicit challenge metadata into a precise XOR crib."""
+    if not prefix_hint:
+        return None
+    match = re.search(r"(?i)([A-Za-z0-9_-]{2,30})\s*\{", str(prefix_hint))
+    return [match.group(1) + "{"] if match else None
+
+
 _PAYLOAD_LABEL_RE = re.compile(
     r"(?im)^\s*(?:cipher|ciphertext|enc(?:rypted)?|message|flag|data|hidden|secret|hex|b64|base64)[a-z0-9_]*\s*[:=]\s*(.+?)\s*$"
 )
@@ -334,6 +342,38 @@ def _analyze_text_uncached(text, prefix_hint=None):
 
     flags_from_labels = []
     encoded = looks_like_encoding(text)
+    structured_input = bool(re.match(r"\s*[\[{]", text))
+    kdf_input = bool(re.search(
+        r"(?i)(?:pbkdf2_sha256|pbkdf2-sha(?:256|512)|\$argon2|\$scrypt\$)",
+        text,
+    ))
+    parameter_input = bool(re.search(
+        r"(?im)^\s*(?:n|p|g|e|c|cipher|ciphertext)\s*[=:]", text
+    ))
+
+    # Structured artifacts and RSA parameter dumps have deterministic,
+    # verified solvers. Run those first and stop before generic factoring,
+    # substitution, or chain jobs can consume minutes on the same input.
+    if structured_input:
+        fast_entries = structured_mod.analyze(text, prefix_hint=prefix_hint)
+        fast_flags = []
+        for entry in fast_entries:
+            if isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                fast_flags.extend(_flag_hits(entry[-1]))
+        if fast_flags:
+            return _rank(fast_entries), _filter_flag_families(
+                list(dict.fromkeys(fast_flags))
+            )
+    elif parameter_input:
+        fast_entries = _try_rsa_params(text)
+        fast_flags = []
+        for entry in fast_entries:
+            if isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                fast_flags.extend(_flag_hits(entry[-1]))
+        if fast_flags:
+            return _rank(fast_entries), _filter_flag_families(
+                list(dict.fromkeys(fast_flags))
+            )
     # Two-time pad detection: c1_hex = ... / c2_hex = ... pattern
     m1 = re.search(r'c1_hex\s*=\s*([0-9a-fA-F]+)', text)
     m2 = re.search(r'c2_hex\s*=\s*([0-9a-fA-F]+)', text)
@@ -358,11 +398,9 @@ def _analyze_text_uncached(text, prefix_hint=None):
         ("length-ext", lambda: _length_ext_job(text)),
         ("fernet", lambda: _fernet_job(text)),
         ("prng", lambda: _prng_job(text)),
-        ("xor", lambda: xor_mod.crack_xor(text)),
+        ("xor", lambda: xor_mod.crack_xor(
+            text, prefixes=_prefix_cribs(prefix_hint))),
     ] + jobs_extra
-    structured_input = bool(re.match(r"\s*[\[{]", text))
-    kdf_input = bool(re.search(r"(?i)(?:pbkdf2_sha256|pbkdf2-sha(?:256|512)|\$argon2|\$scrypt\$)", text))
-    parameter_input = bool(re.search(r"(?im)^\s*(?:n|p|g|e|c|cipher|ciphertext)\s*[=:]", text))
     if structured_input or kdf_input or parameter_input:
         # The generic repeating-key XOR search is expensive and has a high
         # false-positive rate on deterministic parameter/KDF artifacts.
@@ -427,7 +465,8 @@ def _analyze_text_uncached(text, prefix_hint=None):
     # merge — the header around a payload wrecks classic-cipher key recovery
     for payload in _labeled_payloads(text):
         try:
-            sub_ranked, sub_flags = analyze_text(payload)
+            sub_ranked, sub_flags = analyze_text(payload,
+                                                  prefix_hint=prefix_hint)
             results.extend(sub_ranked)
             flags_from_labels.extend(sub_flags)
         except Exception:
@@ -1133,7 +1172,13 @@ def run_crypto(target, interactive=False, prefix_hint=None):
                 source_text = as_text
                 ranked, flags = analyze_text(as_text,
                                              prefix_hint=prefix_hint)
-                ranked2, flags2 = analyze_file(target, as_binary=True)
+                # A verified textual solve is complete; the second generic
+                # file pass only adds noise and can re-enter expensive
+                # factoring/classic jobs. Keep the deep pass for misses.
+                if flags:
+                    ranked2, flags2 = [], []
+                else:
+                    ranked2, flags2 = analyze_file(target, as_binary=True)
                 ranked = ranked + [r for r in ranked2 if r not in ranked]
                 flags = list(dict.fromkeys(flags + flags2))
             else:

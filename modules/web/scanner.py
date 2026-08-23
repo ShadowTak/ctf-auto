@@ -42,6 +42,42 @@ def _cookie_headers(response):
     return values
 
 
+def _response_flags(response):
+    """Extract flags from body and metadata, including redirect headers."""
+    if response is None:
+        return []
+    values = [response.text, response.headers.get("location", "")]
+    for key, value in response.headers.items():
+        if "flag" in key.lower() or key.lower() in {
+                "x-debug", "x-internal-response", "x-secret"}:
+            values.append(str(value))
+    found = []
+    for value in values:
+        known, candidates = extract_flags(value)
+        for item in known + candidates:
+            if item not in found:
+                found.append(item)
+    return found
+
+
+def _unique_urls(base, values, limit=100):
+    """Normalize discovered paths/URLs and keep deterministic scan order."""
+    out, seen = [], set()
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        url = raw if raw.startswith(("http://", "https://")) else \
+            base.rstrip("/") + "/" + raw.lstrip("/")
+        url = url.rstrip("/") or base.rstrip("/")
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def run_web(target, interactive=False, use_browser=False, reset_session=True):
     """Public entry. target = URL. Returns list of flags found.
 
@@ -63,6 +99,7 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         warn_line(f"เชื่อมต่อ {base} ไม่ได้ — ตรวจ URL หรือลอง http/https")
         return flags
     ok_line(f"เชื่อมต่อได้ (HTTP {probe.status})")
+    flags.extend(_response_flags(probe))
 
     # 1) recon
     extra_paths, recon_flags = recon_mod.run_recon(base)
@@ -134,7 +171,12 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
     # (print_lines, flags) and the outputs are printed in order afterwards.
     print()
     home = httpx.get(base + "/", timeout=10)
-    ep_200 = [base + "/" + p for p, s, _, _ in found if s == 200][:40]
+    interesting_statuses = {200, 201, 204, 301, 302, 307, 401, 403, 405, 500}
+    discovered_endpoints = [
+        base + "/" + p for p, s, _, _ in found
+        if s in interesting_statuses
+    ] + list(extra_paths) + list(discovered_paths)
+    ep_200 = _unique_urls(base, discovered_endpoints, limit=100)
 
     def phase_deep():
         """IDOR enum + form POST + fuzz every endpoint + CTR/GraphQL/JSON."""
@@ -260,7 +302,11 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         return lines, list(dict.fromkeys(fl))
 
     def phase_advanced():
-        endpoints = ep_200 + [base + "/" + p for p, _, _, _ in found]
+        endpoints = _unique_urls(
+            base,
+            ep_200 + [base + "/" + p for p, _, _, _ in found],
+            limit=140,
+        )
         findings, fl = advanced_mod.scan_advanced(base, endpoints)
         return findings or ["  [!] ไม่พบ multi-step web exploit ที่ตอบ flag"], fl
 

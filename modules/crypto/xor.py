@@ -670,7 +670,7 @@ def _english_char_score(ch):
     return 0
 
 
-def crack_xor(data, known_plaintext=None):
+def crack_xor(data, known_plaintext=None, prefixes=None):
     """Auto path: crib (decisive for CTF) -> single-byte -> repeating-key ->
     wordlist-key. The expensive anneal only runs when the crib found nothing."""
     from .common import text_score
@@ -682,7 +682,7 @@ def crack_xor(data, known_plaintext=None):
     # crib first: flag-prefix XOR is the most common CTF pattern and it is
     # both fast and exact, so a hit can skip the expensive anneal
     try:
-        cribs = crib_attack(data)
+        cribs = crib_attack(data, prefixes=prefixes)
     except Exception:
         cribs = []
     for label, plain in cribs:

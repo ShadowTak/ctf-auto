@@ -373,6 +373,9 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None)
         if w:
             dd, p_, q_ = w
             found.append(("wiener", strip_zeros(long_to_bytes(pow(c, dd, n)))))
+            # Wiener is a verified private-key recovery. Do not fall through
+            # into generic factorers after it succeeds.
+            return found
     except Exception:
         pass
 
@@ -380,6 +383,8 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None)
     if n2 is not None:
         try:
             found.extend(shared_prime_attack(n, n2, e, c))
+            if found:
+                return found
         except Exception:
             pass
 

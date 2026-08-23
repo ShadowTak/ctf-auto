@@ -1,6 +1,7 @@
 """Web recon: headers, tech fingerprint, robots/sitemap, CMS hints, HTTP
 methods, and flag scanning of the homepage."""
 import re
+import urllib.parse
 
 from core import httpx
 from core.flag import extract_flags
@@ -78,13 +79,26 @@ def scan_robots(base):
 
 
 def scan_sitemap(base):
+    found = []
     for path in ("/sitemap.xml", "/sitemap_index.xml", "/sitemap.txt"):
         r = httpx.get(base + path, timeout=6)
         if r is not None and r.status == 200:
             urls = re.findall(r"<loc>([^<]+)</loc>", r.text)
             print(f"  {path}: พบ {len(urls)} URL")
-            return urls
-    return []
+            origin = urllib.parse.urlparse(base).netloc
+            for value in urls:
+                parsed = urllib.parse.urlparse(value.strip())
+                if parsed.netloc and parsed.netloc != origin:
+                    continue
+                route = parsed.path or "/"
+                if parsed.query:
+                    route += "?" + parsed.query
+                found.append(route.lstrip("/"))
+            # sitemap indexes commonly point at another sitemap; retain the
+            # first useful document and let bounded discovery handle the rest.
+            if found:
+                return list(dict.fromkeys(found))
+    return found
 
 
 def scan_security_txt(base):
@@ -178,8 +192,7 @@ def run_recon(base):
         flags.extend(known + cands)
     urls = scan_sitemap(base)
     for u in urls:
-        if "flag" in u.lower() or "secret" in u.lower():
-            paths.append(u.replace(base, "").lstrip("/"))
+        paths.append(u.replace(base, "").lstrip("/"))
     sec = scan_security_txt(base)
     if sec:
         known, cands = extract_flags(sec)

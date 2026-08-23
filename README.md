@@ -74,6 +74,7 @@
 ```bash
 python3 update.py --check                 # ตรวจ git/dependency/tool
 python3 update.py --update --deps         # fast-forward + ติดตั้ง requirements
+python3 update.py                         # อัปเดตจาก origin/main + ตรวจ compile
 python3 update.py --all --pro              # อัปเดต + optional Python deps + verify
 python3 update.py --install-tools          # ติดตั้ง exiftool/ImageMagick/zbar ฯลฯ เมื่อรันด้วย user ปกติ
 python3 update.py --browser                # ติดตั้ง Chromium สำหรับ --browser

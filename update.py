@@ -181,7 +181,10 @@ def main():
     parser.add_argument("--all", action="store_true", help="update, install deps/tools and verify")
     args = parser.parse_args()
     if not any(vars(args).values()):
-        args.check = True
+        # The common remote workflow is simply ``python3 update.py``. Make
+        # that command pull the latest fast-forward and verify it, while the
+        # explicit --check mode remains available for diagnostics.
+        args.update = True
 
     branch, commit, dirty = repo_status()
     print(f"Project: {ROOT}")
@@ -199,6 +202,8 @@ def main():
     if args.browser or args.all:
         success = install_browser() and success
     if args.all:
+        success = verify() and success
+    elif args.update and success:
         success = verify() and success
     return 0 if success else 1
 

@@ -127,7 +127,13 @@ def _run_crypto(jid, text=None, filepath=None):
                 max(len(file_source_text), 1) > 0.8)
             if is_text:
                 file_ranked, flags = analyze_text(file_source_text)
-                file_ranked2, flags2 = analyze_file(filepath, as_binary=True)
+                # analyze_text already runs the verified structured/RSA fast
+                # path. Avoid re-entering generic factorers when it solved the
+                # file; this keeps the UI responsive on hard RSA artifacts.
+                if flags:
+                    file_ranked2, flags2 = [], []
+                else:
+                    file_ranked2, flags2 = analyze_file(filepath, as_binary=True)
                 file_ranked += [item for item in file_ranked2 if item not in file_ranked]
                 flags = list(dict.fromkeys(flags + flags2))
             else:
