@@ -30,6 +30,13 @@ class StructuredCryptoTests(unittest.TestCase):
         results = structured.analyze(json.dumps(obj))
         self.assertIn(("structured-autokey", plain), results)
 
+    def test_playfair_accepts_explicit_lab_prefix_hint(self):
+        artifact = ("Playfair Key: redactedSECURITY\n"
+                    "Ciphertext: HO GA AU UG RH QC IS YZ QC RK ES TU SO DI UF SI CG OK EY KA HT YR HT PO")
+        results = structured.analyze(artifact, prefix_hint="redactedCTF{...}")
+        self.assertIn(("structured-playfair-flag",
+                       "redactedCTF{PLAYFAIRCIPHERDIGRAPHSUBSTITUTION}"), results)
+
     def test_rsa_common_modulus(self):
         n, message, e1, e2 = 3233, 42, 3, 5
         obj = {"n": n, "e1": e1, "e2": e2,

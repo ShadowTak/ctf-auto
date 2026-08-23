@@ -77,10 +77,15 @@ def _filter_flag_families(flags):
 def _flag_hits(text):
     if isinstance(text, bytes):
         text = text.decode("latin-1", "replace")
-    # Keep the decoded bytes literal.  In particular, do not turn a naked
-    # token such as ``DUCTFsecret`` into a made-up ``DUCTF{secret}`` flag.
+    # Keep the decoded bytes literal.  The wrapped value below is only an
+    # additional candidate for an explicit, known prefix already in the text.
     known, cands = flaglib.extract_flags(text)
-    return known + cands
+    # Some challenges intentionally omit braces in the decoded plaintext
+    # (for example SCRIPTCTFNOTWHATITSEEMS).  The prefix itself is explicit
+    # evidence, so expose the canonical wrapped form alongside the literal
+    # decode instead of losing the answer during flag collection.
+    wrapped = flaglib.wrap_known_prefix(text)
+    return list(dict.fromkeys(known + cands + wrapped))
 
 
 def _try_rsa_params(text):
@@ -316,7 +321,7 @@ def _prng_job(text):
     return out
 
 
-def _analyze_text_uncached(text):
+def _analyze_text_uncached(text, prefix_hint=None):
     """Run every solver; return ranked results and flags found."""
     if not text or not text.strip():
         return [], []
@@ -345,7 +350,8 @@ def _analyze_text_uncached(text):
 
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
-        ("structured", lambda: structured_mod.analyze(text)),
+        ("structured", lambda: structured_mod.analyze(text,
+                                                       prefix_hint=prefix_hint)),
         ("nested-json", lambda: _nested_payload_job(text)),
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
@@ -492,10 +498,16 @@ def _analyze_text_cached(text):
     return tuple(ranked), tuple(flags)
 
 
-def analyze_text(text):
-    """Cached public wrapper; return fresh lists for compatibility."""
+def analyze_text(text, prefix_hint=None):
+    """Cached public wrapper; return fresh lists for compatibility.
+
+    Prefix hints are explicit challenge metadata and intentionally bypass the
+    text-only cache so they never contaminate a standalone decode.
+    """
     if not isinstance(text, str) or len(text) > 100_000:
-        return _analyze_text_uncached(text)
+        return _analyze_text_uncached(text, prefix_hint=prefix_hint)
+    if prefix_hint:
+        return _analyze_text_uncached(text, prefix_hint=prefix_hint)
     ranked, flags = _analyze_text_cached(text)
     return list(ranked), list(flags)
 
@@ -1100,8 +1112,13 @@ def _extract_strings(data, min_len=4):
     return out
 
 
-def run_crypto(target, interactive=False):
-    """Public entry for the crypto category. target = file path or raw string."""
+def run_crypto(target, interactive=False, prefix_hint=None):
+    """Public entry for the crypto category.
+
+    ``prefix_hint`` is optional challenge metadata such as ``redactedCTF{...}``.
+    It is used only by callers that have an explicit flag format (the lab
+    API), so standalone scans still preserve undecorated plaintext exactly.
+    """
     section("🔐 CRYPTO AUTO-DETECT")
     info_line(f"target: {target}")
 
@@ -1114,7 +1131,8 @@ def run_crypto(target, interactive=False):
             as_text = data.decode("utf-8")
             if sum(1 for c in as_text if c.isprintable()) / max(len(as_text), 1) > 0.8:
                 source_text = as_text
-                ranked, flags = analyze_text(as_text)
+                ranked, flags = analyze_text(as_text,
+                                             prefix_hint=prefix_hint)
                 ranked2, flags2 = analyze_file(target, as_binary=True)
                 ranked = ranked + [r for r in ranked2 if r not in ranked]
                 flags = list(dict.fromkeys(flags + flags2))
@@ -1124,7 +1142,7 @@ def run_crypto(target, interactive=False):
             ranked, flags = analyze_file(target, as_binary=True)
     else:
         source_text = target
-        ranked, flags = analyze_text(target)
+        ranked, flags = analyze_text(target, prefix_hint=prefix_hint)
 
     # The legacy API also returns generic brace-shaped candidates.  Keep
     # those visible in the decode ranking, but reserve the prominent FLAG

@@ -5,7 +5,7 @@ import base64
 
 sys.path.insert(0, ".")
 
-from core.flag import extract_flags
+from core.flag import extract_flags, wrap_known_prefix
 from modules.crypto.autodetect import _filter_flag_families, analyze_text
 from modules.crypto.xor import crib_attack
 
@@ -51,6 +51,10 @@ class RawFlagOutputTests(unittest.TestCase):
         known, candidates = extract_flags("answer=customEvent{kept_as_is}")
         self.assertEqual(known, [])
         self.assertEqual(candidates, ["customEvent{kept_as_is}"])
+
+    def test_naked_known_prefix_is_wrapped_from_decoded_plaintext(self):
+        self.assertIn("scriptCTF{notwhatitseems}",
+                      wrap_known_prefix("SCRIPTCTFNOTWHATITSEEMS"))
 
 
 if __name__ == "__main__":

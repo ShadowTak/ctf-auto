@@ -444,7 +444,7 @@ def _autokey_results(obj):
     return out
 
 
-def _playfair_results(text):
+def _playfair_results(text, prefix_hint=None):
     key_match = re.search(r"(?im)^\s*(?:playfair\s+)?(?:key|keyword)\s*[:=]\s*([A-Za-z]+)", text)
     cipher_match = re.search(r"(?is)(?:ciphertext|cipher)\s*[:=]\s*([A-Za-z\s]+)", text)
     if not key_match or not cipher_match:
@@ -482,6 +482,12 @@ def _playfair_results(text):
     if marker:
         body = marker.group(1)
         prefixes = infer_prefixes(text)
+        if prefix_hint:
+            prefix = str(prefix_hint).split("{", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z0-9_-]{2,30}", prefix):
+                marker = prefix + "{"
+                if marker not in prefixes:
+                    prefixes.append(marker)
         for prefix in prefixes:
             results.append(("structured-playfair-flag", prefix + body + "}"))
             # Playfair padding/formatting can leave a short terminal digraph;
@@ -550,7 +556,7 @@ def _ecdlp_results(obj):
     return out
 
 
-def analyze(text):
+def analyze(text, prefix_hint=None):
     """Return solver-style results from JSON or labeled structured text."""
     if not text or not text.strip():
         return []
@@ -571,7 +577,7 @@ def analyze(text):
         results.extend(_blockcipher_results(obj))
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
-    results.extend(_playfair_results(text))
+    results.extend(_playfair_results(text, prefix_hint=prefix_hint))
     return results
 
 
