@@ -175,6 +175,13 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
   border-radius:4px;font-size:.75rem;color:var(--text2);margin-right:8px;
 }
 .r-item .value .method{color:var(--accent2);font-weight:600}
+.solution{margin-top:10px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)}
+.solution-summary{color:var(--accent2);font-size:.78rem;font-weight:700}
+.solution-scope{color:var(--text3);font-size:.72rem;margin-top:3px}
+.solution details{margin-top:6px}.solution summary{cursor:pointer;color:var(--text2);font-size:.72rem}
+.solution-steps{margin-top:6px;display:grid;gap:5px}.solution-step{font-size:.72rem;color:var(--text2);line-height:1.5}
+.solution-step code{color:var(--text);font-family:var(--font);word-break:break-all}
+.decode-output{margin:8px 0 0;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)}
 
 /* ── Flag highlight ────────────────────────────────────────────── */
 .flag-found{
@@ -287,6 +294,7 @@ input::placeholder,textarea::placeholder{color:var(--dim)}
 .job-status.running{color:var(--phosphor)}.job-status.stopping{color:var(--amber)}.job-status.cancelled{color:var(--danger)}
 .results-body{max-height:560px}.r-item{padding:13px 18px;border-color:var(--line-1)}.r-item:hover{background:var(--phosphor-soft)}
 .r-item .label{font-size:.66rem;letter-spacing:.11em}.r-item .value{font-size:.8rem;color:var(--paper)}
+.solution{border-color:var(--line-2);background:var(--ink-1)}.solution-summary{color:var(--cyan)}.solution-scope,.solution summary{color:var(--muted)}.solution-step{color:var(--paper)}.solution-step code{color:var(--paper)}.decode-output{border-color:var(--line-2);background:var(--ink-0);color:var(--paper)}
 .badge{border-radius:2px!important;border:1px solid currentColor;background:transparent!important;padding:2px 6px!important}
 .badge-flag{color:var(--phosphor)}.badge-decode,.badge-scan{color:var(--cyan)}.badge-net{color:var(--amber)}.badge-error{color:var(--danger)}
 .flag-found{background:var(--phosphor-soft);border-left:2px solid var(--phosphor)}.flag-found .value{color:var(--phosphor);font-size:.9rem}
@@ -594,6 +602,24 @@ function setJobStatus(text, state) {
   el.className = 'job-status' + (state ? ' ' + state : '');
 }
 
+function renderSolution(solution, expanded) {
+  if (!solution) return '';
+  const steps = solution.steps || [];
+  const rows = steps.map(step => `
+    <div class="solution-step"><b>#${escHtml(step.index)}</b>
+      <span>${escHtml(step.operation || 'solver')}</span>:
+      <code>${escHtml(step.input || '')}</code> →
+      <code>${escHtml(step.output || '')}</code>
+    </div>`).join('');
+  return `<div class="solution">
+    <div class="solution-summary">HOW: ${escHtml(solution.summary || solution.method || 'solver')}</div>
+    <div class="solution-scope">scope: ${escHtml(solution.scope || 'input')}</div>
+    <details${expanded ? ' open' : ''}><summary>show decode steps (${steps.length})</summary>
+      <div class="solution-steps">${rows}</div>
+    </details>
+  </div>`;
+}
+
 /* ── Render results ────────────────────────────────────────── */
 function renderResults(data) {
   const body = document.getElementById('results-body');
@@ -628,17 +654,21 @@ function renderResults(data) {
         <div class="label"><span class="badge badge-flag">🏁 ${escHtml((r.status || 'verified').toUpperCase())} FLAG</span></div>
         <div class="value">${escHtml(r.flag)}
           <small class="method">${escHtml(r.source || '')}${r.evidence && r.evidence.length ? ' · ' + escHtml(r.evidence.join(' → ')) : ''}</small>
+          ${renderSolution(r.solution, true)}
         </div>
       </div>`;
     } else if (r.type === 'candidate') {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-decode">CANDIDATE</span></div>
-        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${r.evidence && r.evidence.length ? `<small class="method"> · ${escHtml(r.evidence.join(' → '))}</small>` : ''}</div>
+        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${r.evidence && r.evidence.length ? `<small class="method"> · ${escHtml(r.evidence.join(' → '))}</small>` : ''}${renderSolution(r.solution, true)}</div>
       </div>`;
     } else if (r.type === 'decode') {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-decode">DECODE</span></div>
-        <div class="value"><span class="score">${r.score}</span><span class="method">${escHtml(r.method)}</span> → ${escHtml((r.output || '').substring(0, 300))}</div>
+        <div class="value"><span class="score">${r.score}</span><span class="method">${escHtml(r.method)}</span>
+          <pre class="decode-output">${escHtml(r.output || '')}</pre>
+          ${renderSolution(r.explanation, false)}
+        </div>
       </div>`;
     } else if (r.type === 'scan') {
       html += `<div class="r-item">

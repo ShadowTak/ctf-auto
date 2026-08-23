@@ -628,7 +628,7 @@ def _flag_evidence(ledger, text, source, verified=False, confidence=.7):
 
 
 def _decode_texts(texts, ledger):
-    from modules.crypto.autodetect import analyze_text_evidence
+    from modules.crypto.autodetect import analyze_text_evidence, explain_decode
     decodes = []
     # Direct strings are evidence; only encoded-looking snippets go through
     # the expensive crypto pipeline, keeping image scans bounded and useful.
@@ -663,7 +663,8 @@ def _decode_texts(texts, ledger):
             if output and output != value and _printable(output):
                 decodes.append({"source": source, "method": str(label),
                                 "score": round(float(score), 3),
-                                "output": _clip(output, 4096)})
+                                "output": _clip(output, 4096),
+                                "explanation": explain_decode(label, output, value)})
     return _unique(decodes, 160)
 
 
@@ -819,6 +820,12 @@ def run_image(path, run_tools=True):
         section("Derived decodes")
         for item in report["decodes"]:
             info_line(f"{item.get('source')} :: {item.get('method')} => {item.get('output', item.get('error'))}")
+            explanation = item.get("explanation")
+            if explanation:
+                ok_line(f"วิธีแกะ: {explanation['summary']} ({explanation['scope']})")
+                for step in explanation.get("steps", []):
+                    print(f"      {step['index']}. {step['operation']}: "
+                          f"{step['input']} -> {step['output']}")
     if report["tools"]:
         section("Optional forensic tools")
         for item in report["tools"]:

@@ -3,7 +3,8 @@ import base64
 import json
 import unittest
 
-from modules.crypto.autodetect import analyze_text, analyze_text_evidence
+from modules.crypto.autodetect import (analyze_text, analyze_text_evidence,
+                                       explain_decode)
 
 
 class NestedPayloadTests(unittest.TestCase):
@@ -25,6 +26,20 @@ class NestedPayloadTests(unittest.TestCase):
         self.assertTrue(matching)
         self.assertTrue(any("json[$.response.token]" in evidence
                             for evidence in matching[0].evidence))
+
+    def test_explanation_replays_intermediate_values(self):
+        flag = "THCTT{explain_every_step}"
+        inner = base64.b64encode(flag.encode()).decode()
+        nested = base64.b64encode(inner.encode()).decode()
+        artifact = json.dumps({"token": nested})
+
+        explanation = explain_decode(
+            "json[$.token] -> chain-best(base64>base64)", flag, artifact)
+
+        self.assertEqual(explanation["scope"], "JSON path $.token")
+        self.assertEqual(explanation["trace"], ["base64", "base64"])
+        self.assertEqual(explanation["steps"][-1]["output"], flag)
+        self.assertIn(inner, explanation["steps"][0]["output"])
 
 
 if __name__ == "__main__":

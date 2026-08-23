@@ -522,10 +522,12 @@ def analyze_text_evidence(text):
         if low.startswith("chain-best("):
             return "xor" not in low
         return low.split(" ", 1)[0] in {
-            "base16", "base32", "base32hex", "base45", "base58",
+            "base16", "base32", "base32hex", "base45", "base58", "base64",
             "base62", "base85", "ascii85", "hex", "url", "unicode",
             "html", "gzip", "zlib", "morse", "brainfuck", "ook",
-            "malbolge", "bacon", "emoji", "jwt",
+            "malbolge", "bacon", "emoji", "jwt", "binary", "octal",
+            "decimal", "quoted-printable", "a1z26", "nato", "tapcode",
+            "custom-base",
         }
 
     for score, label, output in ranked:
@@ -593,6 +595,171 @@ def _chain_decode_job(text):
     except Exception:
         pass
     return out
+
+
+def _preview_decode_value(value, limit=240):
+    """Make an intermediate value safe and readable in CLI/UI explanations."""
+    if isinstance(value, bytes):
+        value = value.decode("latin-1", "replace")
+    value = str(value if value is not None else "")
+    value = value.replace("\r", "\\r").replace("\n", "\\n")
+    return value if len(value) <= limit else value[:limit] + f"… ({len(value)} chars)"
+
+
+def _json_value_at_path(text, path):
+    """Resolve the simple ``$.key[0].value`` paths emitted by nested decode."""
+    if not text or not path or not path.startswith("$"):
+        return None
+    try:
+        import json
+        current = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    for match in re.finditer(r"\.([^.\[]+)|\[(\d+)\]", path[1:]):
+        key, index = match.groups()
+        try:
+            current = current[int(index)] if index is not None else current[key]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+    return current if isinstance(current, (str, bytes)) else None
+
+
+def _decoder_for_explanation(name):
+    """Find a primitive decoder for replaying a displayed chain step."""
+    normalized = str(name or "").strip().lower()
+    aliases = {"base16": "hex", "gzip/zlib": "gzip", "zlib": "gzip"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized == "gzip":
+        return lambda value: encodings.dec_gzip(
+            value.encode("latin-1") if isinstance(value, str) else value)
+    for decoder_name, decoder in (encodings._ALL_LAYER_DECODERS +
+                                  encodings._CHAIN_TRANSFORMS):
+        if decoder_name.lower() == normalized:
+            return decoder
+    for decoder_name, decoder in encodings._LAYER_DECODERS:
+        if decoder_name.lower() == normalized:
+            return decoder
+    return None
+
+
+def _explanation_operations(label):
+    """Extract a human-readable operation list from a solver label."""
+    raw = str(label or "").strip()
+    nested_path = None
+    nested = re.match(r"^json\[(.*?)\]\s*->\s*(.*)$", raw)
+    if nested:
+        nested_path, raw = nested.groups()
+        raw = raw.strip()
+
+    stage = re.match(r"^chain\[(\d+)\]=(.+)$", raw)
+    if stage:
+        number, operation = stage.groups()
+        return nested_path, [(f"chain stage {number}: {operation}", operation)]
+
+    best = re.match(r"^chain-best\((.*)\)$", raw)
+    if best:
+        names = [part.strip() for part in best.group(1).split(">") if part.strip()]
+        return nested_path, [(name, name) for name in names]
+
+    names = [part.strip() for part in raw.split("->") if part.strip()]
+    return nested_path, [(name, name) for name in (names or [raw])]
+
+
+def explain_decode(label, output, source_text=None):
+    """Return replayable, UI-friendly details for a ranked decode result.
+
+    The solver result remains the exact decoded text.  This companion object
+    only explains the path that produced it; if a primitive cannot be safely
+    replayed, the final solver output is shown as the verified last step.
+    """
+    nested_path, operations = _explanation_operations(label)
+    initial = source_text
+    if nested_path:
+        nested_value = _json_value_at_path(source_text, nested_path)
+        if nested_value is not None:
+            initial = nested_value
+    if initial is None:
+        initial = ""
+    # ``chain[2]=rot13`` stores only the current stage in the legacy ranked
+    # label. Rebuild the earlier greedy stages when they reproduce the same
+    # solver output, so the explanation does not pretend stage two started
+    # from the original ciphertext.
+    if operations and operations[0][0].startswith("chain stage "):
+        stage_match = re.match(r"chain stage (\d+): (.+)$", operations[0][0])
+        if stage_match and isinstance(initial, str):
+            stage_number = int(stage_match.group(1))
+            try:
+                stages = encodings.chain_decode(initial, max_depth=stage_number)
+                if (len(stages) >= stage_number and
+                        str(stages[stage_number - 1][1]) == str(output)):
+                    operations = [
+                        (f"chain stage {index}: {name}", name)
+                        for index, (name, _value) in enumerate(
+                            stages[:stage_number], 1)]
+            except Exception:
+                pass
+    current = initial
+    steps = []
+    for index, (display_name, lookup_name) in enumerate(operations, 1):
+        before = current
+        decoder = _decoder_for_explanation(lookup_name)
+        replayed = None
+        if decoder is not None:
+            try:
+                replayed = decoder(current)
+            except Exception:
+                replayed = None
+            if replayed == current:
+                replayed = None
+        # A solver-specific method (RSA/XOR/hash/etc.) cannot be replayed by
+        # a text primitive. Its actual ranked output is still the authoritative
+        # final value and is attached to the last displayed step.
+        if replayed is None and index == len(operations):
+            replayed = output
+        if replayed is None:
+            replayed = before
+        steps.append({
+            "index": index,
+            "operation": display_name,
+            "input": _preview_decode_value(before),
+            "output": _preview_decode_value(replayed),
+        })
+        current = replayed
+
+    if not steps:
+        steps = [{"index": 1, "operation": str(label),
+                  "input": _preview_decode_value(initial),
+                  "output": _preview_decode_value(output)}]
+    trace = [step["operation"] for step in steps]
+    scope = f"JSON path {nested_path}" if nested_path else "input"
+    return {
+        "method": str(label),
+        "scope": scope,
+        "trace": trace,
+        "summary": "decode with " + " -> ".join(trace),
+        "steps": steps,
+        "input": _preview_decode_value(initial),
+        "output": _preview_decode_value(output),
+    }
+
+
+def explain_flag(flag, ranked, source_text=None):
+    """Attach the best available decode explanation to a discovered flag."""
+    for entry in ranked or []:
+        if isinstance(entry, (tuple, list)) and len(entry) >= 3:
+            output = entry[2]
+            if flag and flag in str(output):
+                return explain_decode(entry[1], output, source_text)
+    return {
+        "method": "flag detector",
+        "scope": "scanner output",
+        "trace": ["flag detector"],
+        "summary": "flag-shaped value detected; no reversible decode trace available",
+        "steps": [{"index": 1, "operation": "flag detector",
+                    "input": "scanner output", "output": _preview_decode_value(flag)}],
+        "input": "scanner output",
+        "output": _preview_decode_value(flag),
+    }
 
 
 def _hash_crack(text):
@@ -938,6 +1105,7 @@ def run_crypto(target, interactive=False):
     section("🔐 CRYPTO AUTO-DETECT")
     info_line(f"target: {target}")
 
+    source_text = None
     if os.path.isfile(target):
         with open(target, "rb") as f:
             data = f.read()
@@ -945,6 +1113,7 @@ def run_crypto(target, interactive=False):
         try:
             as_text = data.decode("utf-8")
             if sum(1 for c in as_text if c.isprintable()) / max(len(as_text), 1) > 0.8:
+                source_text = as_text
                 ranked, flags = analyze_text(as_text)
                 ranked2, flags2 = analyze_file(target, as_binary=True)
                 ranked = ranked + [r for r in ranked2 if r not in ranked]
@@ -954,6 +1123,7 @@ def run_crypto(target, interactive=False):
         except Exception:
             ranked, flags = analyze_file(target, as_binary=True)
     else:
+        source_text = target
         ranked, flags = analyze_text(target)
 
     # The legacy API also returns generic brace-shaped candidates.  Keep
@@ -968,8 +1138,15 @@ def run_crypto(target, interactive=False):
 
     print()
     if display_flags:
+        print()
         for f in display_flags:
             flag_line(f"FLAG: {f}")
+            explanation = explain_flag(f, ranked, source_text)
+            ok_line(f"วิธีแกะ: {explanation['summary']}")
+            info_line(f"ขอบเขต: {explanation['scope']}")
+            for step in explanation["steps"]:
+                print(f"      {step['index']}. {step['operation']}: "
+                      f"{step['input']} -> {step['output']}")
     else:
         warn_line("ยังไม่เจอ flag โดยตรง — ดูผล decode ข้างล่าง")
 
@@ -981,6 +1158,8 @@ def run_crypto(target, interactive=False):
             trace = " -> ".join(decode_trace(label))
             trace_suffix = f" [trace: {trace}]" if trace else ""
             print(f"  {shown_count:2}. [{score:8.1f}] {label}{trace_suffix}: {shown}")
+            explanation = explain_decode(label, text, source_text)
+            print(f"      HOW: {explanation['summary']} ({explanation['scope']})")
             if len(text) > 120:
                 print(f"      ... (total {len(text)} chars)")
     else:

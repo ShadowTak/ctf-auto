@@ -79,7 +79,8 @@ def _finish_job(jid, results, error=None, cancelled=False):
 def _run_crypto(jid, text=None, filepath=None):
     try:
         from modules.crypto.autodetect import (
-            run_crypto, analyze_text_evidence)
+            analyze_file, analyze_text, analyze_text_evidence,
+            explain_decode, explain_flag)
         results = []
         if text:
             text_ranked, findings = analyze_text_evidence(text)
@@ -89,10 +90,14 @@ def _run_crypto(jid, text=None, filepath=None):
                     score = r[0] if len(r) > 0 else 0
                     label = r[1] if len(r) > 1 else ""
                     out = r[2] if len(r) > 2 else ""
+                    explanation = explain_decode(label, out, text)
                     results.append({"type": "decode", "method": str(label),
-                                    "score": round(float(score), 2), "output": str(out)[:500]})
+                                    "score": round(float(score), 2),
+                                    "output": str(out)[:5000],
+                                    "explanation": explanation})
             for finding in (findings or []):
                 value = finding.value
+                solution = explain_flag(value, text_ranked, text)
                 if finding.kind == "verified":
                     # Keep the old shape for consumers while exposing the
                     # richer status/evidence fields to the UI.
@@ -101,16 +106,46 @@ def _run_crypto(jid, text=None, filepath=None):
                                         "status": "verified",
                                         "confidence": finding.confidence,
                                         "source": finding.source,
-                                        "evidence": list(finding.evidence)})
+                                        "evidence": list(finding.evidence),
+                                        "solution": solution})
                 elif finding.kind == "candidate":
                     results.append({"type": "candidate", "value": value,
                                     "confidence": finding.confidence,
                                     "source": finding.source,
-                                    "evidence": list(finding.evidence)})
+                                    "evidence": list(finding.evidence),
+                                    "solution": solution})
         if filepath:
-            flags = run_crypto(filepath)
+            file_source_text = None
+            with open(filepath, "rb") as handle:
+                file_data = handle.read()
+            try:
+                file_source_text = file_data.decode("utf-8")
+            except UnicodeDecodeError:
+                file_source_text = None
+            is_text = bool(file_source_text) and (
+                sum(1 for char in file_source_text if char.isprintable()) /
+                max(len(file_source_text), 1) > 0.8)
+            if is_text:
+                file_ranked, flags = analyze_text(file_source_text)
+                file_ranked2, flags2 = analyze_file(filepath, as_binary=True)
+                file_ranked += [item for item in file_ranked2 if item not in file_ranked]
+                flags = list(dict.fromkeys(flags + flags2))
+            else:
+                file_ranked, flags = analyze_file(filepath, as_binary=True)
+            for r in (file_ranked or []):
+                if isinstance(r, (list, tuple)) and len(r) >= 3:
+                    score, label, out = r[0], r[1], r[2]
+                    results.append({"type": "decode", "method": str(label),
+                                    "score": round(float(score), 2),
+                                    "output": str(out)[:5000],
+                                    "explanation": explain_decode(label, out,
+                                                                    file_source_text)})
             for f in (flags or []):
-                results.append({"type": "flag", "flag": f})
+                results.append({"type": "flag", "flag": f,
+                                "status": "candidate",
+                                "source": "crypto:file scanner",
+                                "solution": explain_flag(f, file_ranked,
+                                                           file_source_text)})
             results.append({"type": "file", "path": os.path.basename(filepath)})
         _finish_job(jid, results)
     except Exception as e:
@@ -133,16 +168,27 @@ def _run_image(jid, filepath):
                                 "data": json.dumps(values, ensure_ascii=False,
                                                      default=str)})
         for finding in report.get("findings", []):
+            solution = next((item.get("explanation") for item in report.get("decodes", [])
+                             if item.get("output") and
+                             finding.get("value", "") in item.get("output", "")), None)
+            if solution is None:
+                solution = {"method": "image forensics",
+                            "scope": finding.get("source", "image evidence"),
+                            "summary": "value extracted directly from image evidence",
+                            "steps": [{"index": 1, "operation": finding.get("source", "image evidence"),
+                                       "input": "image bytes", "output": finding.get("value", "")}]}
             if finding.get("kind") == "verified":
                 results.append({"type": "flag", "flag": finding["value"],
                                 "status": "verified", "confidence": finding.get("confidence"),
                                 "source": finding.get("source"),
-                                "evidence": finding.get("evidence", [])})
+                                "evidence": finding.get("evidence", []),
+                                "solution": solution})
             elif finding.get("kind") == "candidate":
                 results.append({"type": "candidate", "value": finding["value"],
                                 "confidence": finding.get("confidence"),
                                 "source": finding.get("source"),
-                                "evidence": finding.get("evidence", [])})
+                                "evidence": finding.get("evidence", []),
+                                "solution": solution})
         _finish_job(jid, results)
     except Exception as e:
         _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")

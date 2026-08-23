@@ -31,6 +31,7 @@
 - **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
 - **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
 - **Decode trace** — ผลที่ได้จากการถอดจะแสดง method/path ที่ใช้ เช่น `base64 -> hex -> rot13`; solver จะตัดงาน classic/annealing ที่ไม่เกี่ยวกับ JSON/KDF/RSA parameter dump เพื่อให้ deterministic inputs เร็วขึ้น
+- **Solution explanation** — เมื่อเจอผลลัพธ์จะแสดงวิธีแกะที่ใช้, input/output ของแต่ละขั้น, JSON path ที่พบ payload และผูกคำอธิบายไว้ใต้ flag ใน CLI/Web UI; ถ้าเป็น solver เฉพาะทางที่ replay เป็น primitive ไม่ได้ จะระบุไว้ตรงๆ ว่าเป็น solver output
 
 **Web เพิ่มเติม**
 
