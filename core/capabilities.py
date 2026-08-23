@@ -39,7 +39,10 @@ def detect_capabilities():
         _module("PIL", "Pillow image pixel backend"),
     ]
     for name, command in (("nmap", "nmap"), ("tshark", "tshark"),
-                          ("curl", "curl"), ("exiftool", "exiftool"),
+                          ("curl", "curl"), ("hashcat", "hashcat"),
+                          ("john", "john"), ("ffuf", "ffuf"),
+                          ("sqlmap", "sqlmap"), ("radare2", "r2"),
+                          ("exiftool", "exiftool"),
                           ("tesseract", "tesseract"), ("zbarimg", "zbarimg"),
                           ("steghide", "steghide"), ("zsteg", "zsteg"),
                           ("binwalk", "binwalk"), ("identify", "identify")):

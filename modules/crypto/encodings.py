@@ -1361,13 +1361,20 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
     results = []
     frontier = [(text, "")]
     seen_nodes = {text}
-    transform_names = {n for n, _ in _CHAIN_TRANSFORMS}
-
     def expand_branch(item):
-        """Apply every structural decoder (then transforms on dead ends)
-        to one branch. Pure function — safe to run across a thread pool."""
+        """Expand structural decoders *and* text transforms at every node.
+
+        The old implementation only tried ROT13/ROT47/leet when no structural
+        decoder matched.  That is not a safe search rule: a ROT13-wrapped
+        Base64 string is also syntactically valid Base64, so the real branch
+        was discarded before it could reach the flag.  Keep both families in
+        the beam and use path guards plus the global node/deadline budgets to
+        prevent transform cycles from exploding.
+        """
         cur, path = item
         produced = []
+        path_parts = [part for part in path.split(">") if part]
+        last = path_parts[-1] if path_parts else ""
         applied_structural = False
         for name, fn in _ALL_LAYER_DECODERS:
             try:
@@ -1383,15 +1390,14 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
             applied_structural = True
             new_path = f"{path}>{name}" if path else name
             produced.append((nxt, new_path))
-        if applied_structural:
-            return produced, True
-        # dead end: peel a rot13/leet-style layer. Never chain a transform
-        # onto another transform (rot13>rot47>rot13>... is pure noise)
-        last = path.rsplit(">", 1)[-1] if path else ""
-        if last in transform_names:
-            return [], False
-        produced = []
+
+        # Transforms are allowed alongside structural branches.  Do not repeat
+        # the same transform immediately or more than four times in one path;
+        # this keeps rot13/rot47 cycles bounded while allowing transform ->
+        # Base64 -> transform chains.
         for name, fn in _CHAIN_TRANSFORMS:
+            if name == last or path_parts.count(name) >= 4:
+                continue
             try:
                 nxt = fn(cur)
             except Exception:
@@ -1400,7 +1406,7 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
                 continue
             new_path = f"{path}>{name}" if path else name
             produced.append((nxt, new_path))
-        return produced, bool(produced)
+        return produced, bool(applied_structural or produced)
 
     import time as _time
     deadline = _time.monotonic() + 12.0  # hard wall-clock guard per chain

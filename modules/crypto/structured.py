@@ -22,6 +22,7 @@ from . import aead
 from . import dh
 from . import signatures
 from . import lattice
+from . import rsa_hard
 from core.flag import infer_prefixes
 
 
@@ -104,7 +105,32 @@ def _rsa_results(obj):
         p = _int(_get(mapping, "p"))
         q = _int(_get(mapping, "q"))
         n2 = _int(_get(mapping, "n2"))
+        dp = _int(_get(mapping, "dp", "d_p", "d mod p-1"))
+        dq = _int(_get(mapping, "dq", "d_q", "d mod q-1"))
+        qinv = _int(_get(mapping, "qinv", "q_inv", "iqmp"))
+        prime_list = _get(mapping, "primes", "factors", "prime_factors")
         specialized = False
+
+        # Multi-prime RSA and CRT exponent leaks are both common hard-mode
+        # artifacts.  Solve these before generic factoring: a 2048-bit n with
+        # a leaked dp should be instant, not a FactorDB timeout.
+        if n and e and c is not None and isinstance(prime_list, list):
+            factors = [_int(value) for value in prime_list]
+            if factors and all(value and value > 1 for value in factors):
+                plain = rsa_hard.decrypt_multi_prime(n, e, c, factors)
+                if plain is not None:
+                    out.append(("structured-rsa-multi-prime", plain))
+                    specialized = True
+        if n and e and c is not None and (dp or dq or (p and q)):
+            recovered = rsa_hard.recover_private_from_crt(
+                n, e, dp=dp, dq=dq, p=p, q=q, qinv=qinv)
+            if recovered:
+                d, rp, rq = recovered
+                plain = rsa_hard.strip_zeros(rsa_hard.long_to_bytes(
+                    pow(c, d, n)))
+                if pow(int.from_bytes(plain, "big"), e, n) == c % n:
+                    out.append(("structured-rsa-crt-leak", plain))
+                    specialized = True
 
         # Shared-prime records often use n1/n2 instead of a single n. Solve
         # this before the generic RSA ladder, which would otherwise try to
@@ -168,6 +194,24 @@ def _rsa_results(obj):
                     out.append(("structured-rsa-common-modulus", _plain(m)))
             except (ValueError, ZeroDivisionError):
                 pass
+
+        # Signature artifacts are often shipped next to the message in JSON.
+        # A verified signature is useful evidence in its own right and can
+        # reveal a flag when the challenge asks the solver to validate a
+        # forged/forged-looking message.
+        signed_message = _get(mapping, "message", "message_bytes", "data")
+        signature = _get(mapping, "signature", "sig", "s")
+        hash_name = _get(mapping, "hash", "hash_algorithm", "digest") or "sha256"
+        if n and e and signed_message is not None and signature is not None:
+            message_bytes = signed_message if isinstance(signed_message, bytes) else _bytes(signed_message)
+            if message_bytes is None and isinstance(signed_message, str):
+                message_bytes = signed_message.encode()
+            sig_bytes = _bytes(signature)
+            if sig_bytes is None and isinstance(signature, int):
+                sig_bytes = long_to_bytes(signature)
+            if message_bytes and sig_bytes and rsa_hard.verify_pkcs1_v15_signature(
+                    message_bytes, sig_bytes, n, e, hash_name):
+                out.append(("structured-rsa-signature-verified", message_bytes))
 
     # Broadcast data is normally an array of {n,e,c} records.
     for mapping in _walk(obj):

@@ -88,6 +88,33 @@ def _flag_hits(text):
     return list(dict.fromkeys(known + cands + wrapped))
 
 
+def _verified_fast_hits(entries, prefix_hint=None):
+    """Collect only high-signal hits for deterministic fast-path exits.
+
+    Generic ``word{...}`` candidates are deliberately not enough to skip the
+    rest of the pipeline: classic/XOR decoys frequently have that shape.  An
+    explicit challenge prefix is accepted as strong evidence even when it is
+    not part of the built-in competition vocabulary.
+    """
+    explicit = {p[:-1].lower() for p in flaglib.infer_prefixes(prefix_hint or "")
+                if p.endswith("{")}
+    hits = []
+    for entry in entries or ():
+        if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+            continue
+        value = entry[-1]
+        known, _ = flaglib.extract_flags(value, include_candidates=False)
+        for item in known:
+            if item not in hits:
+                hits.append(item)
+        if explicit:
+            for item in _flag_hits(value):
+                prefix = item.split("{", 1)[0].lower() if "{" in item else ""
+                if prefix in explicit and item not in hits:
+                    hits.append(item)
+    return hits
+
+
 def _try_rsa_params(text):
     """If the input looks like an RSA parameter dump (n=/e=/c= or space
     separated), run the RSA attacks."""
@@ -158,6 +185,49 @@ def _labeled_payloads(text):
         payload = m.group(1).strip().strip("`'\"")
         if payload and payload != text.strip() and len(payload) >= 4:
             out.append(payload)
+    return out
+
+
+_KEY_HINT_RE = re.compile(
+    r"(?im)\b(?:key|keyword)\s*(?:hint\s*)?(?:is|=|:)\s*[`\"']?"
+    r"([A-Za-z][A-Za-z0-9_-]{1,31})"
+)
+
+
+def _hinted_classic_results(text):
+    """Use explicit key metadata from a challenge bundle.
+
+    Auto key-recovery is necessarily heuristic and often loses on short
+    Vigenere/Beaufort flags.  Challenge descriptions commonly disclose a key
+    hint (``The key is ORANGE``), so consume that evidence when present and
+    apply it to labeled payloads such as ``cipher: ...``.  This never guesses a
+    key from ordinary ciphertext; it only acts on explicit metadata.
+    """
+    keys = [m.group(1) for m in _KEY_HINT_RE.finditer(text or "")]
+    if not keys:
+        return []
+    payloads = _labeled_payloads(text) or [text.strip()]
+    out = []
+    for key in dict.fromkeys(keys):
+        for payload in payloads:
+            if not payload or len(payload) < 4:
+                continue
+            try:
+                _, plain = classic.vigenere_decrypt(payload, key=key)
+            except Exception:
+                continue
+            if plain and plain != payload:
+                out.append((f"vigenere-explicit-key={key}", plain))
+            # Some CTF authors advance the key over every ciphertext byte,
+            # including punctuation, instead of only alphabetic characters.
+            # Keep both interpretations; a flag-shaped result provides the
+            # evidence needed to rank the intended convention.
+            try:
+                per_char = classic._decrypt_per_char(payload, key)
+            except Exception:
+                per_char = None
+            if per_char and per_char != plain and per_char != payload:
+                out.append((f"vigenere-explicit-key-per-char={key}", per_char))
     return out
 
 
@@ -277,14 +347,35 @@ def _wordlist_candidates():
 
 
 def _prng_job(text):
-    """Predict-the-next challenges: recover java/glibc PRNGs from observed
-    integer sequences found in the artifact."""
+    """Predict-the-next challenges from explicit generator metadata.
+
+    Java/glibc were the original autodetect paths.  Wire the already-tested
+    xorshift128+ implementation here as well; keeping the generator name
+    mandatory prevents arbitrary integer lists from triggering an expensive
+    SMT search.
+    """
     from . import prng as prng_mod
 
     out = []
 
     def _int_list(m):
         return [int(x) for x in re.findall(r"-?\d+", m.group(1))]
+
+    # V8/browser xorshift128+ outputs.  Full 64-bit outputs are preferred;
+    # Math.random() floating-point recovery still needs a dedicated solver.
+    xs_match = re.search(
+        r"(?is)(?:xorshift128\+|xs128p|next_u64)[^\[]*[\[=]\s*"
+        r"([\d\s,\n]{20,900})", text)
+    if xs_match:
+        vals = _int_list(xs_match)
+        if len(vals) >= 6:
+            try:
+                gen = prng_mod.xs128p_recover(vals)
+                if gen is not None:
+                    out.append(("xorshift128+-recovered",
+                                f"next={[gen.next_u64() for _ in range(3)]}"))
+            except Exception:
+                pass
 
     # java: consecutive nextInt() outputs
     m = re.search(
@@ -356,20 +447,14 @@ def _analyze_text_uncached(text, prefix_hint=None):
     # substitution, or chain jobs can consume minutes on the same input.
     if structured_input:
         fast_entries = structured_mod.analyze(text, prefix_hint=prefix_hint)
-        fast_flags = []
-        for entry in fast_entries:
-            if isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                fast_flags.extend(_flag_hits(entry[-1]))
+        fast_flags = _verified_fast_hits(fast_entries, prefix_hint)
         if fast_flags:
             return _rank(fast_entries), _filter_flag_families(
                 list(dict.fromkeys(fast_flags))
             )
     elif parameter_input:
         fast_entries = _try_rsa_params(text)
-        fast_flags = []
-        for entry in fast_entries:
-            if isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                fast_flags.extend(_flag_hits(entry[-1]))
+        fast_flags = _verified_fast_hits(fast_entries, prefix_hint)
         if fast_flags:
             return _rank(fast_entries), _filter_flag_families(
                 list(dict.fromkeys(fast_flags))
@@ -390,6 +475,7 @@ def _analyze_text_uncached(text, prefix_hint=None):
 
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
+        ("explicit-key", lambda: _hinted_classic_results(text)),
         ("structured", lambda: structured_mod.analyze(text,
                                                        prefix_hint=prefix_hint)),
         ("nested-json", lambda: _nested_payload_job(text)),
@@ -1151,12 +1237,13 @@ def _extract_strings(data, min_len=4):
     return out
 
 
-def run_crypto(target, interactive=False, prefix_hint=None):
+def run_crypto(target, interactive=False, prefix_hint=None, context_text=None):
     """Public entry for the crypto category.
 
     ``prefix_hint`` is optional challenge metadata such as ``redactedCTF{...}``.
-    It is used only by callers that have an explicit flag format (the lab
-    API), so standalone scans still preserve undecorated plaintext exactly.
+    ``context_text`` carries non-secret title/description/hints from a lab
+    bundle; it is used for explicit key dispatch but is not allowed to replace
+    the original artifact (so JSON/binary schema detection remains intact).
     """
     section("🔐 CRYPTO AUTO-DETECT")
     info_line(f"target: {target}")
@@ -1172,10 +1259,23 @@ def run_crypto(target, interactive=False, prefix_hint=None):
                 source_text = as_text
                 ranked, flags = analyze_text(as_text,
                                              prefix_hint=prefix_hint)
+                if context_text:
+                    contextual = _hinted_classic_results(
+                        str(context_text) + "\n\n" + as_text)
+                    ranked.extend(_rank(contextual))
+                    for entry in contextual:
+                        if isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                            for item in _flag_hits(entry[-1]):
+                                if item not in flags:
+                                    flags.append(item)
                 # A verified textual solve is complete; the second generic
                 # file pass only adds noise and can re-enter expensive
                 # factoring/classic jobs. Keep the deep pass for misses.
-                if flags:
+                # Generic brace-shaped candidates are not enough to skip the
+                # binary/deep pass.  For example a hex ciphertext often
+                # yields a coincidental ``CJ{...}`` under ROT47 before a
+                # companion LCG solver reveals the real plaintext.
+                if _verified_fast_hits(ranked, prefix_hint):
                     ranked2, flags2 = [], []
                 else:
                     ranked2, flags2 = analyze_file(target, as_binary=True)
@@ -1187,15 +1287,31 @@ def run_crypto(target, interactive=False, prefix_hint=None):
             ranked, flags = analyze_file(target, as_binary=True)
     else:
         source_text = target
-        ranked, flags = analyze_text(target, prefix_hint=prefix_hint)
+        ranked, flags = analyze_text(str(target), prefix_hint=prefix_hint)
+        if context_text:
+            contextual = _hinted_classic_results(
+                str(context_text) + "\n\n" + str(target))
+            ranked.extend(_rank(contextual))
+            for entry in contextual:
+                if isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                    for item in _flag_hits(entry[-1]):
+                        if item not in flags:
+                            flags.append(item)
 
     # The legacy API also returns generic brace-shaped candidates.  Keep
     # those visible in the decode ranking, but reserve the prominent FLAG
     # section for a known/explicit flag prefix so heuristic ROT13/XOR ghosts
     # cannot be mistaken for accepted answers.
     display_flags = []
+    explicit_prefixes = [p[:-1].lower() for p in
+                         flaglib.infer_prefixes(prefix_hint or "")
+                         if p.endswith("{")]
     for value in flags:
         known, _ = flaglib.extract_flags(value, include_candidates=False)
+        if explicit_prefixes and not any(
+                str(value).lower().startswith(prefix + "{")
+                for prefix in explicit_prefixes):
+            continue
         if known and value not in display_flags:
             display_flags.append(value)
 

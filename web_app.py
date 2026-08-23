@@ -12,6 +12,7 @@ import tempfile
 import threading
 import argparse
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,6 +25,44 @@ app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 _jobs = {}   # job_id → {status, results, started, finished, error, cancel}
 _lock = threading.Lock()
 _web_scan_lock = threading.Lock()
+
+
+def _detect_uploaded_kind(path, original=""):
+    """Classify an upload by magic bytes first, extension second.
+
+    CTF artifacts are frequently misnamed (``flag.jpg`` containing a ZIP or
+    a text dump with no extension), so this is deliberately not MIME-only.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(64)
+            sample = head + handle.read(64 * 1024)
+    except OSError:
+        return "binary"
+    if head[:4] in (b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4",
+                    b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d",
+                    b"\x0a\x0d\x0d\x0a"):
+        return "pcap"
+    image_signatures = (
+        b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a",
+        b"BM", b"RIFF",
+    )
+    if any(head.startswith(signature) for signature in image_signatures):
+        return "image"
+    try:
+        text = sample.decode("utf-8")
+        printable = sum(char.isprintable() or char in "\r\n\t" for char in text)
+        if text and printable / len(text) >= 0.82:
+            return "text"
+    except UnicodeDecodeError:
+        pass
+    extension = os.path.splitext(original or path)[1].lower()
+    if extension in {".pcap", ".pcapng", ".cap"}:
+        return "pcap"
+    if extension in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+                     ".tif", ".tiff", ".ico", ".pnm"}:
+        return "image"
+    return "binary"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +104,7 @@ def _job_cancelled(jid):
 
 
 def _finish_job(jid, results, error=None, cancelled=False):
+    cleanup = []
     with _lock:
         if jid in _jobs:
             stopped = cancelled or _jobs[jid]["cancel"].is_set()
@@ -72,6 +112,13 @@ def _finish_job(jid, results, error=None, cancelled=False):
             _jobs[jid]["results"] = results
             _jobs[jid]["finished"] = time.time()
             _jobs[jid]["error"] = error
+            cleanup = list(_jobs[jid].get("cleanup_paths", ()))
+    for path in cleanup:
+        try:
+            if path and os.path.isfile(path):
+                os.unlink(path)
+        except OSError:
+            pass
 
 
 # ── Crypto ───────────────────────────────────────────────────────────────────
@@ -256,7 +303,10 @@ def _run_web(jid, url, use_browser=False):
 
 def _run_network(jid, filepath):
     try:
-        from modules.network import pcap_analyzer
+        # The project exposes the pure-Python parser as modules.network.pcap;
+        # keep the UI path on that same implementation so uploaded pcaps do
+        # not fail with a stale import name.
+        from modules.network import pcap as pcap_analyzer
         results = []
         results.append({"type": "file", "path": os.path.basename(filepath)})
         parsed = pcap_analyzer.analyze(filepath)
@@ -271,6 +321,148 @@ def _run_network(jid, filepath):
         else:
             results.append({"type": "network", "data": str(parsed)[:2000]})
         _finish_job(jid, results)
+    except Exception as e:
+        _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
+
+
+def _run_child_for_auto(parent_jid, fn, args=(), kwargs=None):
+    """Run an existing category runner and return its result list.
+
+    Category runners already contain their own error handling and evidence
+    formatting.  A short-lived child job lets the upload orchestrator reuse
+    them concurrently without duplicating that logic or allowing one runner
+    to overwrite the parent job's state.
+    """
+    child = _new_job()
+    with _lock:
+        parent = _jobs.get(parent_jid)
+        if parent and child in _jobs:
+            _jobs[child]["cancel"] = parent["cancel"]
+    try:
+        fn(child, *args, **(kwargs or {}))
+        with _lock:
+            item = _jobs.get(child, {})
+            return list(item.get("results", ())), item.get("error")
+    finally:
+        with _lock:
+            _jobs.pop(child, None)
+
+
+def _publish_job_results(jid, results):
+    """Publish bounded partial evidence without marking the job complete."""
+    with _lock:
+        job = _jobs.get(jid)
+        if job and job["status"] == "running":
+            job["results"] = list(results)
+
+
+def _fast_upload_crypto(filepath):
+    """Cheap first pass for upload UX; the full solver follows in parallel.
+
+    It intentionally limits itself to direct strings, structured artifacts,
+    RSA parameter parsing and one-pass encodings.  Expensive classic/XOR/
+    annealing work stays in the background runner, so a dropped file produces
+    visible evidence quickly without sacrificing final coverage.
+    """
+    from core.flag import extract_flags
+    from modules.crypto import encodings, structured
+    from modules.crypto.autodetect import _try_rsa_params
+
+    try:
+        with open(filepath, "rb") as handle:
+            data = handle.read(8 * 1024 * 1024)
+    except OSError:
+        return []
+    text = data.decode("utf-8", errors="ignore")
+    results = [{"type": "file", "path": os.path.basename(filepath)}]
+    if text:
+        for flag in extract_flags(text)[0]:
+            results.append({"type": "flag", "flag": flag,
+                            "status": "verified", "source": "upload:direct"})
+        fast_entries = []
+        try:
+            fast_entries.extend(structured.analyze(text))
+        except Exception:
+            pass
+        try:
+            fast_entries.extend(_try_rsa_params(text))
+        except Exception:
+            pass
+        # ``try_all_encodings`` also launches the deep chain beam-search.  A
+        # dropped-file fast pass must not wait on that 12-second guard; the
+        # full child runner below still performs it after this evidence is
+        # published.
+        direct_decoders = (
+            ("base64", encodings.dec_base64),
+            ("base32", encodings.dec_base32),
+            ("base16", encodings.dec_base16),
+            ("hex", encodings.dec_hex),
+            ("base85", encodings.dec_base85),
+            ("ascii85", encodings.dec_ascii85),
+            ("url", encodings.dec_url),
+            ("rot13", encodings.dec_rot13),
+            ("rot47", encodings.dec_rot47),
+            ("binary", encodings.dec_binary),
+            ("morse", encodings.dec_morse),
+            ("quoted-printable", encodings.dec_quoted_printable),
+        )
+        def decode_one(item):
+            label, decoder = item
+            try:
+                value = decoder(text)
+                return (label, value) if value and value != text else None
+            except Exception:
+                return None
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for entry in pool.map(decode_one, direct_decoders):
+                if entry:
+                    fast_entries.append(entry)
+        for entry in fast_entries:
+            if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                continue
+            label, output = str(entry[0]), entry[-1]
+            for flag in extract_flags(str(output))[0]:
+                results.append({"type": "flag", "flag": flag,
+                                "status": "candidate", "source": "upload:fast:" + label})
+            results.append({"type": "decode", "method": label,
+                            "score": 0, "output": str(output)[:5000]})
+    else:
+        # Binary first pass: magic/embedded flag extraction is cheap and keeps
+        # image/pcap uploads responsive while the deep runners continue.
+        for flag in extract_flags(data.decode("latin-1", "replace"))[0]:
+            results.append({"type": "flag", "flag": flag,
+                            "status": "candidate", "source": "upload:binary-strings"})
+    return results
+
+
+def _run_auto_file(jid, filepath, original=""):
+    """Upload pipeline: classify once, then run all relevant solvers in parallel."""
+    try:
+        kind = _detect_uploaded_kind(filepath, original)
+        results = _fast_upload_crypto(filepath)
+        results.insert(0, {"type": "auto", "kind": kind,
+                            "path": os.path.basename(filepath),
+                            "pipelines": ["crypto"] + ([kind] if kind in ("image", "pcap") else [])})
+        _publish_job_results(jid, results)
+        runners = [(_run_crypto, (), {"filepath": filepath})]
+        if kind == "image":
+            # Image forensics already feeds extracted text through the crypto
+            # chain; running both catches polyglot/embedded binary payloads.
+            runners.append((_run_image, (filepath,), {}))
+        elif kind == "pcap":
+            # Network extraction and raw crypto/blob analysis are independent.
+            runners.append((_run_network, (filepath,), {}))
+
+        errors = []
+        with ThreadPoolExecutor(max_workers=len(runners)) as pool:
+            futures = [pool.submit(_run_child_for_auto, jid, fn, args, kwargs)
+                       for fn, args, kwargs in runners]
+            for future in futures:
+                child_results, child_error = future.result()
+                results.extend(child_results)
+                if child_error:
+                    errors.append(child_error)
+        _finish_job(jid, results, error="\n".join(errors) if errors else None)
     except Exception as e:
         _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
@@ -345,7 +537,23 @@ def api_upload():
     fd, tmp = tempfile.mkstemp(prefix="ctfweb_", suffix=suffix)
     os.close(fd)
     f.save(tmp)
-    return jsonify({"file_path": tmp, "filename": original})
+    payload = {"file_path": tmp, "filename": original,
+               "kind": _detect_uploaded_kind(tmp, original)}
+    # Upload-first is the fast path in the UI: start the complete relevant
+    # pipeline immediately, while still allowing API callers to opt out with
+    # ?auto=0 and submit /api/scan themselves.
+    auto = request.args.get("auto", "1").lower() not in {"0", "false", "no"}
+    if auto:
+        jid = _new_job()
+        with _lock:
+            _jobs[jid]["cleanup_paths"] = [tmp]
+        threading.Thread(target=_run_auto_file, args=(jid, tmp, original),
+                         daemon=True).start()
+        payload["job_id"] = jid
+        payload["auto"] = True
+    else:
+        payload["auto"] = False
+    return jsonify(payload)
 
 
 @app.route("/api/status/<jid>")

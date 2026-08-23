@@ -28,6 +28,10 @@
 - Classic เพิ่ม **Beaufort / Variant Beaufort / Gronsfeld** (hill-climb + simulated annealing + beam), **keyboard-shift**, **T9 multi-tap**, **Polybius**
 - Structured JSON dispatcher เพิ่ม ECC fields (`p,a,b,gx,gy,qx,qy`) และ `{algorithm:"xtea",key,ciphertext}`
 - **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
+- **Context-aware artifact solving** — auto-lab ส่ง title/description/hints ให้ solver โดยไม่อ่าน writeup; key hints เช่น `The key is ORANGE` จะถูกใช้กับ Vigenere ทั้งแบบนับเฉพาะตัวอักษรและแบบนับทุก byte
+- **Chain graph search** — transform (ROT13/ROT47/leet ฯลฯ) ถูกสำรวจร่วมกับ Base/hex/compression ทุกชั้น ไม่ตัด branch เพียงเพราะ structural decoder ตัวแรกดูเหมือนใช้ได้
+- **PRNG dispatch** — เชื่อม xorshift128+ ที่มีอยู่แล้วเข้ากับ autodetect เมื่อ artifact ระบุ generator ชัดเจน
+- **GCM nonce-reuse hard mode** — รองรับ one-block flag ที่สั้นกว่า 16 ไบต์/ความยาวต่างกัน, แก้สมการ GF(2^128) และใช้ record เพิ่มเพื่อเลือก H ที่ forge ได้จริง
 - **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
 - **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
 - **Decode trace** — ผลที่ได้จากการถอดจะแสดง method/path ที่ใช้ เช่น `base64 -> hex -> rot13`; solver จะตัดงาน classic/annealing ที่ไม่เกี่ยวกับ JSON/KDF/RSA parameter dump เพื่อให้ deterministic inputs เร็วขึ้น
@@ -35,9 +39,14 @@
 
 **Web เพิ่มเติม**
 
+- **AES-ECB oracle workflows** — unknown-prefix byte-at-a-time recovery พร้อม block/prefix alignment และ profile/token cut-and-paste; เชื่อมกับ advanced scanner แบบ bounded และตรวจ flag จาก response เท่านั้น
+- **RSA parity oracle** — binary-search plaintext จาก even/odd decrypt oracle แบบ bounded พร้อมตรวจสมการ RSA ก่อนรับ flag
+- **RSA hard artifacts** — leaked `dp/dq/qinv` factor recovery, multi-prime CRT decryption และ strict PKCS#1 v1.5 signature verification; ทุกผลต้องผ่านสมการ RSA ก่อนแสดง
+
 - **Recursive route discovery** — เดินลิงก์/ฟอร์ม/สคริปต์แบบ same-origin ตาม depth และ page budget, ดึง route จาก JS, source map, JSON และ OpenAPI/Swagger ก่อนส่งเข้า dirbust/injection phases
 - **Unlinked API inventory** — ตรวจ conventional OpenAPI/Swagger/GraphQL/schema paths ที่ไม่ได้ลิงก์, สรุป HTTP operations จาก `paths`, อ่าน source map จริง และเก็บ route จาก SPA XHR/fetch แม้ endpoint จะชื่อ `/v1`, `/rpc`, `/query` หรือ `.json` แทน `/api/`
 - **Dynamic SPA discovery** — `python3 run.py --category web --target http://target --browser` ใช้ Playwright render แบบ headless read-only เพื่อเก็บ client-side routes และ API calls โดยไม่ submit form หรือกด action ใดๆ
+- **Web hard-mode workflows** — JWT `kid`/`jku`/attacker-JWK callback (เปิดใช้ด้วย `--callback-url`), SSRF loopback/IPv6/decimal/metadata bypasses, HTTP parameter pollution, cache/host routing, bounded CL.TE/TE.CL canary และ synchronized race burst; รับเป็น flag เฉพาะเมื่อ response มี flag จริง
 
 **Crypto เพิ่มเติม**
 
@@ -226,6 +235,8 @@ python3 web_app.py --port 9000  # custom port
 - **Network tab**: upload .pcap/.pcapng → auto-analyze (TCP reassembly, HTTP extraction, flag hunt)
 - Real-time progress, flag highlighting, decode ranking
 
+อัปโหลดไฟล์ใน Web UI จะเริ่ม **AUTO pipeline ทันที** โดยตรวจ magic bytes/เนื้อหาแล้วเลือก crypto + image หรือ pcap/network ที่เกี่ยวข้องให้เอง ผล fast-pass จะแสดงก่อน ส่วน chain/classic/XOR deep pass ทำต่อเบื้องหลังและรวมผลเมื่อเสร็จ; ใช้ `?auto=0` กับ `/api/upload` ได้ถ้าต้องการอัปโหลดไว้ก่อนแล้วค่อยเรียก `/api/scan` เอง
+
 ---
 
 ## โครงสร้าง
@@ -249,13 +260,8 @@ ctf-auto/
 ## ทดสอบ (ไม่ต้องมีเป้าหมายจริง)
 
 ```bash
-python3 verify_vectors.py        # ตรวจ AES/ChaCha20/RC4/MT19937/RSA/classic/XOR/HLE กับ test vector มาตรฐาน
-python3 test_tctt_vectors.py     # ตรวจ decoder แบบ TCTT: base45/58/62+Bad62/36, Thai custom-base64,
-                                 #   emoji (bits/offset/base100/subst), Ook!, Malbolge (Hello World)
-python3 -m unittest -q test_structured_crypto.py  # regression tests สำหรับ structured crypto attacks
-python3 test_login.py            # login brute-force กับ server จำลอง (NCSA + PIN 4 หลัก)
-python3 run_web_test.py          # รัน test server ใน thread + web scan จริง
-python3 run_chain_test.py        # ทดสอบ auto chain network -> web
+python3 -m unittest -v test_regression.py  # nested chain, hinted Vigenere, ECB oracle/cut-and-paste
+python3 -m compileall -q core modules    # syntax check ทุก solver
 ```
 
 ## 🎯 คู่มือใช้แข่ง CTF (ฉบับมือใหม่ → โปร)

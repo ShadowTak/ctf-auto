@@ -373,7 +373,7 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
       <button class="btn btn-primary" onclick="runScan('crypto')">▶ Decode</button>
     </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">Auto-detects: base64/32/85, hex, binary, ROT13/47, Caesar, Vigenère, Affine, Atbash, Bacon, RSA (small-e/Wiener/Fermat/shared-prime), XOR, hash crack, chain decode, length extension, brainfuck, Morse, LCG custom cipher</span>
+      <span class="console-note">Upload-first auto mode: detects text/binary/image/pcap, then runs every relevant crypto + embedded decode pipeline in parallel</span>
     </p>
   </div>
 
@@ -393,7 +393,7 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
       <button class="btn btn-primary" onclick="runScan('network')">▶ Analyze</button>
     </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">Auto-detects: TCP reassembly, HTTP extraction, flag in UDP/ICMP exfil, DNS records, port scan results, banner grabbing</span>
+      <span class="console-note">Drop a pcap/pcapng to auto-run TCP reassembly, HTTP extraction, UDP/ICMP exfil hunting and crypto decode on captured blobs</span>
     </p>
   </div>
 
@@ -415,7 +415,7 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
       <button class="btn btn-primary" onclick="runScan('image')">▶ Deep analyze</button>
     </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">EXIF/XMP/PNG chunks, comments, strings, UTF-16, QR/OCR, LSB bit planes,
+      <span class="console-note">Drop the file to auto-run crypto + image forensics: EXIF/XMP/PNG chunks, comments, strings, UTF-16, QR/OCR, LSB bit planes,
       polyglot signatures, embedded files and automatic decode candidates
       </span>
     </p>
@@ -468,8 +468,31 @@ function handleFile(input, category) {
   fd.append('file', file);
   fetch('/api/upload', { method: 'POST', body: fd })
     .then(r => r.json())
-    .then(d => { uploadedFiles[category] = d.file_path; })
+    .then(d => {
+      if (!d.file_path) throw new Error(d.error || 'upload failed');
+      uploadedFiles[category] = d.file_path;
+      if (d.job_id) startAutoUploadJob(d.job_id, d.filename || file.name, d.kind);
+    })
     .catch(e => { nameEl.textContent = 'Upload failed: ' + e; });
+}
+
+function startAutoUploadJob(jid, filename, kind) {
+  if (activeJobId) {
+    setJobStatus('QUEUED // finish the active scan before viewing the uploaded artifact', 'stopping');
+    return;
+  }
+  const resultsEl = document.getElementById('results');
+  resultsEl.classList.add('show');
+  document.getElementById('results-title').textContent = 'Auto-analyzing ' + filename;
+  document.getElementById('results-body').innerHTML =
+    '<div class="empty"><div class="loading-text"><span class="spinner"></span> Detecting file type and running all relevant solvers...</div></div>';
+  document.getElementById('summary').innerHTML = '';
+  document.getElementById('elapsed').textContent = '';
+  document.getElementById('spinner').hidden = false;
+  stopRequested = false;
+  activeJobId = jid;
+  setJobStatus('AUTO // ' + (kind || 'artifact') + ' → crypto + matching deep pipeline', 'running');
+  pollJob(jid);
 }
 
 /* ── Drag & drop ───────────────────────────────────────────── */
@@ -560,6 +583,8 @@ function pollJob(jid) {
           document.getElementById('stop-btn').hidden = true;
           document.getElementById('spinner').hidden = true;
           renderResults(d);
+        } else if (d.results && d.results.length) {
+          renderResults(d, true);
         }
       })
       .catch(() => setJobStatus('WAITING // status poll retrying', 'stopping'));
@@ -621,7 +646,7 @@ function renderSolution(solution, expanded) {
 }
 
 /* ── Render results ────────────────────────────────────────── */
-function renderResults(data) {
+function renderResults(data, live = false) {
   const body = document.getElementById('results-body');
   const title = document.getElementById('results-title');
   const summary = document.getElementById('summary');
@@ -638,6 +663,8 @@ function renderResults(data) {
   if (data.status === 'cancelled') {
     title.textContent = '■ Scan stopped';
     setJobStatus('CANCELLED // partial evidence retained below', 'cancelled');
+  } else if (live) {
+    setJobStatus('RUNNING // fast evidence shown; deep solvers still running', 'running');
   } else {
     setJobStatus('COMPLETE // evidence collection finished', '');
   }
@@ -701,7 +728,7 @@ function renderResults(data) {
   body.innerHTML = html || '<div class="empty"><span class="icon">🔍</span>No results found</div>';
 
   // Title
-  if (data.status !== 'cancelled') {
+  if (data.status !== 'cancelled' && !live) {
     if (flags.length > 0) {
       title.textContent = `✅ ${flags.length} flag${flags.length > 1 ? 's' : ''} found!`;
     } else {

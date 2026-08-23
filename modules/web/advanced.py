@@ -24,6 +24,9 @@ from core.flag import extract_flags
 from modules.crypto.rsa import bytes_to_long, long_to_bytes, parse_pem
 from . import pad_oracle
 from . import sqli_union
+from . import ecb_oracle
+from . import rsa_oracle
+from . import hard as hard_web
 
 
 def _b64url(value):
@@ -560,12 +563,15 @@ def scan_advanced(base, endpoints):
             lambda b, e: scan_prototype_pollution(b, e),
             lambda b, e: scan_cors(b),
             scan_specialized_labs,
+            lambda b, e: ecb_oracle.scan_ecb_oracles(b, e),
+            lambda b, e: rsa_oracle.scan_rsa_parity_oracles(b, e),
             lambda b, e: scan_flask_sessions(b),
             lambda b, e: scan_403_bypass(b),
             lambda b, e: scan_upload_bypass(b),
             scan_ssti_rce,
             lambda b, e: pad_oracle.scan_cbc_attacks(b, e),
-            lambda b, e: sqli_union.scan_union_sqli(b, e))
+            lambda b, e: sqli_union.scan_union_sqli(b, e),
+            hard_web.scan_hard_web)
     findings, flags = [], []
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = [pool.submit(job, base, endpoints) for job in jobs]

@@ -159,6 +159,13 @@ def analyze_jwt(token):
     alg = header.get("alg", "")
     if alg.lower() == "none":
         result["issues"].append("alg=none! server อาจยอมรับ token ไม่มีลายเซ็น")
+    # Header-controlled key locations are the other high-value JWT trust
+    # boundary.  Do not call them exploitable by themselves; the Web scanner
+    # will replay a signed mutation and require a protected flag response.
+    for key in ("jku", "jwk", "kid"):
+        if key in header:
+            result["issues"].append(
+                f"header มี {key} — ตรวจสอบ key lookup / attacker-controlled JWK chain")
     if not sig:
         result["issues"].append("ไม่มี signature")
     secret = crack_secret(token)

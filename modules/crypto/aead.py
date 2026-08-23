@@ -30,6 +30,77 @@ def gf128_pow(value, exponent):
     return result
 
 
+def _gf128_quadratic_roots(coef_square, coef_linear, constant):
+    """Solve ``a*x^2 + b*x = c`` in GF(2^128), returning verified roots.
+
+    GCM nonce reuse normally gives the simpler ``a*x^2 = c`` equation when
+    records have equal lengths.  Different one-block lengths add a linear
+    length-block term; solving the resulting characteristic-two quadratic
+    keeps those short-flag challenges in the automatic path without pulling
+    in a CAS.
+    """
+    a, b, c = map(int, (coef_square, coef_linear, constant))
+    if a == 0:
+        if b == 0:
+            return []
+        x = gf128_mul(c, gf128_pow(b, (1 << 128) - 2))
+        return [x] if gf128_mul(b, x) == c else []
+
+    inv_a = gf128_pow(a, (1 << 128) - 2)
+    q = gf128_mul(b, inv_a)
+    r = gf128_mul(c, inv_a)
+    if q == 0:
+        x = gf128_pow(r, 1 << 127)
+        return [x] if gf128_mul(x, x) == r else []
+
+    q2 = gf128_mul(q, q)
+    t = gf128_mul(r, gf128_pow(q2, (1 << 128) - 2))
+    # Substitute x=q*y, reducing to y^2 + y = t.  Solve this linear map
+    # over GF(2) with a 128-row Gaussian elimination; the second root is
+    # y+1 whenever a solution exists.
+    basis = [1 << i for i in range(128)]
+    rows = [0] * 128
+    for i, unit in enumerate(basis):
+        image = gf128_mul(unit, unit) ^ unit
+        for bit in range(128):
+            if image & (1 << bit):
+                rows[bit] ^= 1 << i
+    augmented = [rows[bit] | (((t >> bit) & 1) << 128)
+                 for bit in range(128)]
+    pivot_row = 0
+    pivot_cols = []
+    for col in range(128):
+        pivot = next((row for row in range(pivot_row, 128)
+                      if (augmented[row] >> col) & 1), None)
+        if pivot is None:
+            continue
+        augmented[pivot_row], augmented[pivot] = (
+            augmented[pivot], augmented[pivot_row])
+        for row in range(128):
+            if row != pivot_row and ((augmented[row] >> col) & 1):
+                augmented[row] ^= augmented[pivot_row]
+        pivot_cols.append(col)
+        pivot_row += 1
+        if pivot_row == 128:
+            break
+    for row in range(pivot_row, 128):
+        if (augmented[row] & ((1 << 128) - 1)) == 0 and \
+                ((augmented[row] >> 128) & 1):
+            return []
+    y = 0
+    for row, col in enumerate(pivot_cols):
+        if (augmented[row] >> 128) & 1:
+            y |= 1 << col
+    roots = []
+    # In this GHASH bit ordering the multiplicative identity is 2^127.
+    for candidate_y in (y, y ^ (1 << 127)):
+        candidate = gf128_mul(q, candidate_y)
+        if gf128_mul(a, gf128_mul(candidate, candidate)) ^ \
+                gf128_mul(b, candidate) == c:
+            roots.append(candidate)
+    return list(dict.fromkeys(roots))
+
+
 def ghash(h, aad=b"", ciphertext=b""):
     """Compute GHASH for already-decoded AAD and ciphertext bytes."""
     h = int(h)
@@ -45,11 +116,12 @@ def ghash(h, aad=b"", ciphertext=b""):
     return value
 
 
-def recover_gcm_subkey_one_block(first, second):
+def recover_gcm_subkey_one_block(first, second, verify_records=None):
     """Recover GCM H and mask from two same-nonce, one-block records.
 
-    This applies only to equal-length one-block ciphertexts with identical
-    AAD. The relation is verified against both supplied tags.
+    This applies to one-block ciphertexts with identical AAD.  If two records
+    leave the characteristic-two quadratic with two valid roots, additional
+    same-nonce records supplied via ``verify_records`` disambiguate them.
     """
     if not isinstance(first, dict) or not isinstance(second, dict):
         return None
@@ -58,21 +130,109 @@ def recover_gcm_subkey_one_block(first, second):
     c1, c2 = decode_bytes(first.get("ciphertext")), decode_bytes(second.get("ciphertext"))
     t1, t2 = decode_bytes(first.get("tag")), decode_bytes(second.get("tag"))
     a1, a2 = decode_bytes(first.get("aad", "")), decode_bytes(second.get("aad", ""))
-    if not c1 or not c2 or not t1 or not t2 or len(c1) != 16 or len(c2) != 16 or a1 != a2:
+    # A one-block GHASH record can contain fewer than 16 ciphertext bytes;
+    # GHASH right-pads that block with zeroes.  The old exact-16 check silently
+    # rejected the common short-flag form of this challenge.
+    if not c1 or not c2 or not t1 or not t2 or \
+            not (0 < len(c1) <= 16 and 0 < len(c2) <= 16) or \
+            len(t1) != 16 or len(t2) != 16 or a1 != a2:
         return None
-    delta_c = int.from_bytes(bytes(x ^ y for x, y in zip(c1, c2)), "big")
+    c1_block, c2_block = c1.ljust(16, b"\0"), c2.ljust(16, b"\0")
+    delta_c = int.from_bytes(bytes(x ^ y for x, y in
+                                   zip(c1_block, c2_block)), "big")
+    delta_len = ((len(c1) * 8) ^ (len(c2) * 8)) & ((1 << 64) - 1)
     delta_t = int.from_bytes(bytes(x ^ y for x, y in zip(t1, t2)), "big")
-    if delta_c == 0:
+    if delta_c == 0 and delta_len == 0:
         return None
     try:
-        h_squared = gf128_mul(delta_t, gf128_pow(delta_c, (1 << 128) - 2))
-        h = gf128_pow(h_squared, 1 << 127)
+        roots = _gf128_quadratic_roots(delta_c, delta_len, delta_t)
     except Exception:
         return None
-    # Same-nonce mask E(K,J0) is tag xor GHASH.
-    mask = int.from_bytes(t1, "big") ^ ghash(h, a1, c1)
-    if (mask ^ ghash(h, a2, c2)) != int.from_bytes(t2, "big"):
+    # Same-nonce mask E(K,J0) is tag xor GHASH.  A quadratic can have two
+    # roots; verify each against both complete tags before accepting one.
+    candidates = []
+    for h in roots:
+        mask = int.from_bytes(t1, "big") ^ ghash(h, a1, c1)
+        if (mask ^ ghash(h, a2, c2)) == int.from_bytes(t2, "big"):
+            candidates.append((h, mask))
+    if not candidates:
         return None
+    extra_records = [record for record in (verify_records or ())
+                     if record is not first and record is not second and
+                     isinstance(record, dict) and
+                     record.get("nonce") == first.get("nonce")]
+    # Two records can leave two mathematically valid H values.  Do not claim
+    # a forgeable key unless a third same-nonce record disambiguates it.
+    if len(candidates) > 1 and not extra_records:
+        return None
+    for h, mask in candidates:
+        valid = True
+        for record in verify_records or ():
+            if record is first or record is second or not isinstance(record, dict):
+                continue
+            if record.get("nonce") != first.get("nonce"):
+                continue
+            ciphertext = decode_bytes(record.get("ciphertext"))
+            tag = decode_bytes(record.get("tag"))
+            aad = decode_bytes(record.get("aad", ""))
+            if not ciphertext or len(ciphertext) > 16 or len(tag or b"") != 16:
+                continue
+            expected = mask ^ ghash(h, aad or b"", ciphertext)
+            if expected != int.from_bytes(tag, "big"):
+                valid = False
+                break
+        if valid:
+            return h, mask
+    return None
+
+
+def recover_gcm_subkey_last_block(first, second, verify_records=None):
+    """Recover GCM H when same-nonce records differ only in the last block.
+
+    For equal-length messages, equal AAD, and identical ciphertext blocks
+    before the last one, the GHASH delta collapses to
+    ``delta_tag = delta_last_ciphertext * H``.  This is a useful multi-block
+    hard-mode case and avoids pretending that a generic high-degree GHASH
+    polynomial has a cheap universal solver.
+    """
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return None
+    if first.get("nonce") != second.get("nonce"):
+        return None
+    c1, c2 = decode_bytes(first.get("ciphertext")), decode_bytes(second.get("ciphertext"))
+    t1, t2 = decode_bytes(first.get("tag")), decode_bytes(second.get("tag"))
+    a1, a2 = decode_bytes(first.get("aad", "")), decode_bytes(second.get("aad", ""))
+    if not c1 or not c2 or len(c1) != len(c2) or a1 != a2 or \
+            len(t1 or b"") != 16 or len(t2 or b"") != 16 or len(c1) <= 16:
+        return None
+    blocks1 = [c1[i:i + 16].ljust(16, b"\0") for i in range(0, len(c1), 16)]
+    blocks2 = [c2[i:i + 16].ljust(16, b"\0") for i in range(0, len(c2), 16)]
+    if blocks1[:-1] != blocks2[:-1] or blocks1[-1] == blocks2[-1]:
+        return None
+    delta_c = int.from_bytes(bytes(a ^ b for a, b in zip(blocks1[-1], blocks2[-1])), "big")
+    delta_t = int.from_bytes(bytes(a ^ b for a, b in zip(t1, t2)), "big")
+    if not delta_c:
+        return None
+    try:
+        ratio = gf128_mul(delta_t, gf128_pow(delta_c, (1 << 128) - 2))
+        # The last ciphertext block is followed by GHASH's length block, so
+        # the delta is delta_C * H^2 (not delta_C * H).
+        h = gf128_pow(ratio, 1 << 127)
+        if gf128_mul(delta_c, gf128_mul(h, h)) != delta_t:
+            return None
+        mask = int.from_bytes(t1, "big") ^ ghash(h, a1 or b"", c1)
+    except (ValueError, TypeError):
+        return None
+    for record in verify_records or ():
+        if not isinstance(record, dict) or record.get("nonce") != first.get("nonce"):
+            continue
+        ciphertext = decode_bytes(record.get("ciphertext"))
+        tag = decode_bytes(record.get("tag"))
+        aad = decode_bytes(record.get("aad", "")) or b""
+        if not ciphertext or len(tag or b"") != 16:
+            continue
+        if mask ^ ghash(h, aad, ciphertext) != int.from_bytes(tag, "big"):
+            return None
     return h, mask
 
 
@@ -88,7 +248,11 @@ def gcm_nonce_reuse_analysis(records):
     records = [r for r in records or () if isinstance(r, dict)]
     for i, first in enumerate(records):
         for second in records[i + 1:]:
-            recovered = recover_gcm_subkey_one_block(first, second)
+            recovered = recover_gcm_subkey_one_block(
+                first, second, verify_records=records)
+            if recovered is None:
+                recovered = recover_gcm_subkey_last_block(
+                    first, second, verify_records=records)
             if recovered:
                 h, mask = recovered
                 out.append(("aead-gcm-nonce-reuse",

@@ -147,8 +147,14 @@ def xs128p_recover(outputs):
     writeup approach); without it only the trivial all-zero state can be
     recognised and None is returned otherwise.
     """
-    if not outputs:
+    # Four outputs can fit multiple internal states that agree on the sample
+    # but diverge on the next value.  Refuse a non-unique prediction unless a
+    # full six-output constraint set is available (zero-stream is exact).
+    if not outputs or (len(outputs) < 6 and
+                       not all((o & _M64) == 0 for o in outputs)):
         return None
+    if all((o & _M64) == 0 for o in outputs):
+        return XorShift128Plus(0, 0)
 
     try:
         import z3  # type: ignore
@@ -162,9 +168,11 @@ def xs128p_recover(outputs):
     s1 = z3.BitVecs("xs_s1", 64)[0]
     cur_s0, cur_s1 = s0, s1
     solver = z3.Solver()
-    for want in outputs[:4]:
+    # Four equations can leave multiple SMT models that agree on the first
+    # outputs but diverge immediately afterwards.  Six keeps the state model
+    # pinned while remaining tiny compared with a normal CTF oracle budget.
+    for want in outputs[:6]:
         t = cur_s0
-        t = t ^ z3.LShR(t, 0)  # keep term order explicit
         t = (t ^ (t << 23)) & _M64
         t = (t ^ z3.LShR(t, 17)) & _M64
         t = (t ^ cur_s1) & _M64

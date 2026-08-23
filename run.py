@@ -500,6 +500,8 @@ def main():
                         help="เปิด optional solver/browser capabilitiesถ้ามีติดตั้ง")
     parser.add_argument("--browser", action="store_true",
                         help="ใช้ Playwright render SPA และเก็บ API routes แบบ read-only")
+    parser.add_argument("--callback-url", default=None,
+                        help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     parser.add_argument("--auto-lab", nargs="?", const="all", default=None,
                         choices=["web", "crypto", "all"],
                         help="สแกนแลปใน stack อัตโนมัติ (web / crypto / all)")
@@ -526,6 +528,12 @@ def main():
         info_line("PRO capabilities: " + (", ".join(available) or "stdlib only"))
         if missing:
             warn_line("PRO capabilities unavailable: " + ", ".join(missing))
+
+    if args.callback_url:
+        # The hard JWT workflow reads this value without changing the normal
+        # HTTP session.  It is intentionally opt-in: a target cannot reach a
+        # random local callback unless the competitor explicitly exposes one.
+        os.environ["CTF_AUTO_JWK_URL"] = args.callback_url.strip()
 
     if args.auto_lab:
         import autolab
