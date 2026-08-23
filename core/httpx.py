@@ -18,6 +18,8 @@ import urllib.parse
 import zlib
 from http.cookies import SimpleCookie
 
+from .cancel import cancelled
+
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -272,6 +274,8 @@ def _decompress(body, resp_headers):
 
 
 def _request_once(method, url, data=None, headers=None, timeout=10):
+    if cancelled():
+        return None
     parsed = urllib.parse.urlparse(url)
     scheme = parsed.scheme.lower() or "http"
     host = parsed.hostname or ""
@@ -306,6 +310,8 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
     # common under burst load — evict and retry with a fresh connection a few
     # times before giving up
     for attempt in range(3):
+        if cancelled():
+            return None
         try:
             conn.request(method, request_target, body=data, headers=hdrs)
             resp = conn.getresponse()
@@ -329,7 +335,7 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
         except (http.client.HTTPException, OSError, socket.timeout,
                 ssl.SSLError, ValueError):
             _POOL.evict(scheme, host, port)
-            if attempt < 2:
+            if attempt < 2 and not cancelled():
                 conn = _POOL.get(scheme, host, port)
                 time.sleep(0.05 * (attempt + 1))
     return None
@@ -348,6 +354,8 @@ def request(method, url, data=None, headers=None, timeout=10,
             body = bytes(data)
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
+        if cancelled():
+            return None
         r = _request_once(method, current, data=body, headers=headers,
                           timeout=timeout)
         if r is None:

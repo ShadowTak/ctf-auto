@@ -1,5 +1,6 @@
 """Threading helpers — run many small tasks in parallel with progress."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from .cancel import cancelled
 from .output import Progress
 
 
@@ -16,7 +17,11 @@ def pmap(func, items, workers=32, desc="", timeout=None):
     progress = Progress(len(items), desc=desc)
     results = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(func, it): it for it in items}
+        futures = {}
+        for it in items:
+            if cancelled():
+                break
+            futures[pool.submit(func, it)] = it
         for fut in as_completed(futures):
             it = futures[fut]
             try:
@@ -24,6 +29,9 @@ def pmap(func, items, workers=32, desc="", timeout=None):
             except Exception as exc:  # noqa: BLE001 — sweep must survive
                 results.append((it, exc))
             progress.tick()
+            if cancelled():
+                for pending in futures:
+                    pending.cancel()
     progress.finish()
     return results
 
@@ -37,6 +45,8 @@ def run_concurrent(funcs, workers=16, desc=""):
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {}
         for i, fn in enumerate(funcs):
+            if cancelled():
+                break
             futures[pool.submit(fn)] = i
         for fut in as_completed(futures):
             i = futures[fut]
@@ -45,5 +55,8 @@ def run_concurrent(funcs, workers=16, desc=""):
             except Exception as exc:  # noqa: BLE001
                 results[i] = exc
             progress.tick()
+            if cancelled():
+                for pending in futures:
+                    pending.cancel()
     progress.finish()
     return results

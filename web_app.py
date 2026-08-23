@@ -21,7 +21,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 
 # ── in-memory job store ───────────────────────────────────────────────────────
-_jobs = {}   # job_id → {status, results, started, finished, error}
+_jobs = {}   # job_id → {status, results, started, finished, error, cancel}
 _lock = threading.Lock()
 _web_scan_lock = threading.Lock()
 
@@ -53,14 +53,22 @@ def _new_job():
     jid = uuid.uuid4().hex[:12]
     with _lock:
         _jobs[jid] = {"status": "running", "results": [], "started": time.time(),
-                       "finished": None, "error": None}
+                       "finished": None, "error": None,
+                       "cancel": threading.Event(), "stop_requested": False}
     return jid
 
 
-def _finish_job(jid, results, error=None):
+def _job_cancelled(jid):
+    with _lock:
+        job = _jobs.get(jid)
+        return bool(job and job["cancel"].is_set())
+
+
+def _finish_job(jid, results, error=None, cancelled=False):
     with _lock:
         if jid in _jobs:
-            _jobs[jid]["status"] = "error" if error else "done"
+            stopped = cancelled or _jobs[jid]["cancel"].is_set()
+            _jobs[jid]["status"] = "cancelled" if stopped else ("error" if error else "done")
             _jobs[jid]["results"] = results
             _jobs[jid]["finished"] = time.time()
             _jobs[jid]["error"] = error
@@ -106,7 +114,7 @@ def _run_crypto(jid, text=None, filepath=None):
             results.append({"type": "file", "path": os.path.basename(filepath)})
         _finish_job(jid, results)
     except Exception as e:
-        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+        _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
 
 def _run_image(jid, filepath):
@@ -137,7 +145,7 @@ def _run_image(jid, filepath):
                                 "evidence": finding.get("evidence", [])})
         _finish_job(jid, results)
     except Exception as e:
-        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+        _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
 
 # ── Web ───────────────────────────────────────────────────────────────────────
@@ -168,7 +176,7 @@ def _run_web_once(jid, url, use_browser=False):
             results.append({"type": "scan", "data": str(output)[:2000]})
         _finish_job(jid, results)
     except Exception as e:
-        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+        _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
 
 def _run_web(jid, url, use_browser=False):
@@ -180,11 +188,14 @@ def _run_web(jid, url, use_browser=False):
     within one scan.
     """
     from core import httpx
+    from core.cancel import clear_event, set_event
     with _web_scan_lock:
         httpx.reset_session()
+        set_event(_jobs[jid]["cancel"])
         try:
             _run_web_once(jid, url, use_browser=use_browser)
         finally:
+            clear_event()
             httpx.reset_session()
             httpx.close_pool()
 
@@ -209,7 +220,7 @@ def _run_network(jid, filepath):
             results.append({"type": "network", "data": str(parsed)[:2000]})
         _finish_job(jid, results)
     except Exception as e:
-        _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+        _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -291,13 +302,29 @@ def api_status(jid):
         job = _jobs.get(jid)
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    elapsed = time.time() - job["started"]
+    elapsed = (job["finished"] or time.time()) - job["started"]
     return jsonify({
         "status": job["status"],
         "results": job["results"],
         "error": job["error"],
         "elapsed": round(elapsed, 1),
+        "stop_requested": job["stop_requested"],
     })
+
+
+@app.route("/api/stop/<jid>", methods=["POST"])
+def api_stop(jid):
+    """Request cooperative cancellation for a running scan."""
+    with _lock:
+        job = _jobs.get(jid)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        if job["status"] in ("done", "error", "cancelled"):
+            return jsonify({"status": job["status"], "accepted": False})
+        job["stop_requested"] = True
+        job["status"] = "stopping"
+        job["cancel"].set()
+        return jsonify({"status": "stopping", "accepted": True})
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
