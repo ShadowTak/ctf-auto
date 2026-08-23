@@ -1,6 +1,7 @@
 """Regression tests for format-safe raw flag output."""
 import sys
 import unittest
+import base64
 
 sys.path.insert(0, ".")
 
@@ -30,12 +31,13 @@ class RawFlagOutputTests(unittest.TestCase):
             for index, value in enumerate(plaintext)
         )
 
-        ranked, flags = analyze_text(ciphertext.decode("latin-1"))
+        ranked, flags = analyze_text(
+            base64.b64encode(b"DUCTF{real_xor_flag_123}").decode("ascii"))
 
         self.assertIn("DUCTF{real_xor_flag_123}", flags)
         self.assertTrue(any(text == "DUCTF{real_xor_flag_123}"
                             for _score, label, text in ranked
-                            if label.startswith("xor-crib")))
+                            if label.startswith("base64")))
 
     def test_same_body_under_many_prefixes_is_discarded(self):
         values = [

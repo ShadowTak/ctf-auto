@@ -29,6 +29,7 @@
 - Structured JSON dispatcher เพิ่ม ECC fields (`p,a,b,gx,gy,qx,qy`) และ `{algorithm:"xtea",key,ciphertext}`
 - **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
 - **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
+- **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
 
 **Web เพิ่มใหม่**
 - **Session controls**: `--cookie "k=v"`, `--header "K: V"` (ใส่ซ้ำได้), `--proxy http://127.0.0.1:8080`, `--timeout`, `--user-agent` — scan โจทย์ที่ต้อง login ก่อน / ผ่าน Burp ได้
@@ -157,9 +158,21 @@ python3 run.py --category full --target 10.10.10.5           # auto chain
 python3 run.py --auto-lab web          # ทุกแลป web
 python3 run.py --auto-lab crypto       # หมวด crypto (static files + web lab)
 python3 run.py --auto-lab all --limit 3   # จำกัดจำนวนแลป
+
+# เปิดตรวจ optional capabilities (Z3, SymPy, browser tooling ฯลฯ)
+python3 run.py --pro --category crypto --target "encoded_string"
 ```
 
 ไม่ต้องติดตั้ง dependency ใดๆ (stdlib ล้วน) — ถ้ามี `nmap`, `pycryptodome` จะทำงานได้ลึกขึ้น
+
+สำหรับโหมด Pro ที่ใช้ constraint/lattice/browser tooling:
+
+```bash
+python3 -m pip install -r requirements-pro.txt
+python3 -m playwright install chromium
+```
+
+`--pro` จะตรวจ capability ก่อนรันและแจ้งรายการที่ไม่มี โดยไม่ทำให้โหมด stdlib ล้มเหลว
 
 ### 🌐 Web UI (Beautiful dark-themed interface)
 

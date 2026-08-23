@@ -5,6 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core import flag as flaglib
+from core.evidence import EvidenceLedger
 from core.output import flag_line, info_line, ok_line, section, warn_line
 from . import encodings
 from . import classic
@@ -347,6 +348,67 @@ def analyze_text(text):
             seen.add(f)
             all_flags.append(f)
     return ranked, _filter_flag_families(all_flags)
+
+
+def analyze_text_evidence(text):
+    """Analyze text and return rich findings without changing the legacy API.
+
+    ``analyze_text`` remains the compatibility entry point returning
+    ``(ranked, list[str])``.  This companion API labels deterministic flag
+    extractions as verified, heuristic XOR cribs as candidates, and all other
+    interesting plaintext as raw decode output.
+    """
+    ranked, legacy_flags = analyze_text(text)
+    ledger = EvidenceLedger()
+    observed = set()
+
+    def deterministic_label(label):
+        """Only a direct, validated decoder can promote a flag to verified."""
+        low = str(label).lower().strip()
+        if low.startswith("chain["):
+            return False  # intermediate chain stages are candidates
+        if low.startswith("chain-best("):
+            return ">" not in low and "xor" not in low
+        return low.split(" ", 1)[0] in {
+            "base16", "base32", "base32hex", "base45", "base58",
+            "base62", "base85", "ascii85", "hex", "url", "unicode",
+            "html", "gzip", "zlib", "morse", "brainfuck", "ook",
+            "malbolge", "bacon", "emoji", "jwt",
+        }
+
+    for score, label, output in ranked:
+        hits = _flag_hits(output)
+        if hits:
+            heuristic = "xor-crib crib-heuristic" in str(label)
+            verified = not heuristic and deterministic_label(label)
+            for value in hits:
+                observed.add(value)
+                ledger.add_flag(
+                    value,
+                    source=f"crypto:{label}",
+                    verified=verified,
+                    confidence=0.92 if verified else
+                    (0.58 if heuristic else 0.68),
+                    evidence=("flag-shaped plaintext", f"score={score:.2f}"),
+                )
+        elif str(label).startswith("xor-crib"):
+            ledger.add(
+                output,
+                kind="candidate",
+                source=f"crypto:{label}",
+                confidence=0.58,
+                evidence=("known-prefix crib", "raw plaintext preserved"),
+            )
+    for value in legacy_flags:
+        if value not in observed:
+            ledger.add_flag(
+                value,
+                source="crypto:flag-detector",
+                verified=False,
+                confidence=0.62,
+                evidence=("flag-shaped output from solver",),
+            )
+    return ranked, ledger.all()
 
 
 def _length_ext_job(text):

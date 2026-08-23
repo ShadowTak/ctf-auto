@@ -22,6 +22,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # ── in-memory job store ───────────────────────────────────────────────────────
 _jobs = {}   # job_id → {status, results, started, finished, error}
 _lock = threading.Lock()
+_web_scan_lock = threading.Lock()
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -68,10 +69,11 @@ def _finish_job(jid, results, error=None):
 
 def _run_crypto(jid, text=None, filepath=None):
     try:
-        from modules.crypto.autodetect import run_crypto, analyze_text
+        from modules.crypto.autodetect import (
+            run_crypto, analyze_text_evidence)
         results = []
         if text:
-            text_ranked, text_flags = analyze_text(text)
+            text_ranked, findings = analyze_text_evidence(text)
             results.append({"type": "text-input", "input": text[:200]})
             for r in (text_ranked or []):
                 if isinstance(r, (list, tuple)):
@@ -80,11 +82,22 @@ def _run_crypto(jid, text=None, filepath=None):
                     out = r[2] if len(r) > 2 else ""
                     results.append({"type": "decode", "method": str(label),
                                     "score": round(float(score), 2), "output": str(out)[:500]})
-            for f in (text_flags or []):
-                if f and f not in [r.get('flag') for r in results if r.get('type') == 'flag']:
-                    # Filter garbage flags: must have {}, reasonable length, mostly printable
-                    if _is_clean_flag(f):
-                        results.append({"type": "flag", "flag": f})
+            for finding in (findings or []):
+                value = finding.value
+                if finding.kind == "verified":
+                    # Keep the old shape for consumers while exposing the
+                    # richer status/evidence fields to the UI.
+                    if _is_clean_flag(value):
+                        results.append({"type": "flag", "flag": value,
+                                        "status": "verified",
+                                        "confidence": finding.confidence,
+                                        "source": finding.source,
+                                        "evidence": list(finding.evidence)})
+                elif finding.kind == "candidate":
+                    results.append({"type": "candidate", "value": value,
+                                    "confidence": finding.confidence,
+                                    "source": finding.source,
+                                    "evidence": list(finding.evidence)})
         if filepath:
             flags = run_crypto(filepath)
             for f in (flags or []):
@@ -97,8 +110,9 @@ def _run_crypto(jid, text=None, filepath=None):
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-def _run_web(jid, url):
+def _run_web_once(jid, url):
     try:
+        from core.evidence import findings_from_flags
         from modules.web.scanner import run_web
         results = []
         results.append({"type": "target", "url": url})
@@ -109,13 +123,38 @@ def _run_web(jid, url):
                                 "data": str(v)[:1000] if not isinstance(v, list) else
                                 json.dumps(v[:50])[:1000]})
         elif isinstance(output, list):
-            for item in output:
-                results.append({"type": "scan", "data": str(item)[:500]})
+            for finding in findings_from_flags(
+                    output, source="web:scanner", verified=False,
+                    confidence=0.78,
+                    evidence=("flag-shaped value returned by scanner",)):
+                results.append({"type": "candidate",
+                                "value": finding.value,
+                                "confidence": finding.confidence,
+                                "source": finding.source,
+                                "evidence": list(finding.evidence)})
         else:
             results.append({"type": "scan", "data": str(output)[:2000]})
         _finish_job(jid, results)
     except Exception as e:
         _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+
+def _run_web(jid, url):
+    """Run one web job with an isolated process-local HTTP session.
+
+    The solver modules intentionally share cookies and learned auth headers
+    across their concurrent phases. The lock prevents two UI jobs from
+    leaking those credentials into each other while preserving that behavior
+    within one scan.
+    """
+    from core import httpx
+    with _web_scan_lock:
+        httpx.reset_session()
+        try:
+            _run_web_once(jid, url)
+        finally:
+            httpx.reset_session()
+            httpx.close_pool()
 
 
 # ── Network ───────────────────────────────────────────────────────────────────

@@ -291,6 +291,7 @@ def crib_attack(data, prefixes=None):
     data = _to_bytes(data)
     out = []
     seen_bodies = {}
+    explicit_prefixes = prefixes is not None
     selected_prefixes = []
     seen_prefixes = set()
     for prefix in (prefixes or FLAG_PREFIXES):
@@ -328,7 +329,7 @@ def crib_attack(data, prefixes=None):
             # partially guessed prefixes from becoming fake flags.
             if _assemble(data[:len(prefix)], key) != prefix:
                 continue
-            trial_keys = [(key, ks <= len(prefix))]
+            trial_keys = [(key, explicit_prefixes and ks <= len(prefix))]
             # A one-byte unknown tail is cheap to exhaust and matters for
             # short real keys (for example a 6-byte key with a 5-byte
             # ``flag{`` crib). Frequency analysis alone can pick the wrong

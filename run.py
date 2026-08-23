@@ -478,6 +478,8 @@ def main():
                         help="timeout ต่อ request (วินาที)")
     parser.add_argument("--user-agent", default=None,
                         help="override User-Agent")
+    parser.add_argument("--pro", action="store_true",
+                        help="เปิด optional solver/browser capabilitiesถ้ามีติดตั้ง")
     parser.add_argument("--auto-lab", nargs="?", const="all", default=None,
                         choices=["web", "crypto", "all"],
                         help="สแกนแลปใน stack อัตโนมัติ (web / crypto / all)")
@@ -495,6 +497,15 @@ def main():
         _httpx.configure(headers=headers or None, cookie=args.cookie,
                          proxy=args.proxy, timeout=args.timeout,
                          user_agent=args.user_agent)
+
+    if args.pro:
+        from core.capabilities import detect_capabilities
+        capabilities = detect_capabilities()
+        available = [item.name for item in capabilities if item.available]
+        missing = [item.name for item in capabilities if not item.available]
+        info_line("PRO capabilities: " + (", ".join(available) or "stdlib only"))
+        if missing:
+            warn_line("PRO capabilities unavailable: " + ", ".join(missing))
 
     if args.auto_lab:
         import autolab

@@ -428,8 +428,13 @@ function renderResults(data) {
   for (const r of results) {
     if (r.type === 'flag') {
       html += `<div class="r-item flag-found">
-        <div class="label"><span class="badge badge-flag">🏁 FLAG</span></div>
+        <div class="label"><span class="badge badge-flag">🏁 ${escHtml((r.status || 'verified').toUpperCase())} FLAG</span></div>
         <div class="value">${escHtml(r.flag)}</div>
+      </div>`;
+    } else if (r.type === 'candidate') {
+      html += `<div class="r-item">
+        <div class="label"><span class="badge badge-decode">CANDIDATE</span></div>
+        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small></div>
       </div>`;
     } else if (r.type === 'decode') {
       html += `<div class="r-item">

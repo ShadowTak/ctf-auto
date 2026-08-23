@@ -1,0 +1,6 @@
+# Optional competition tooling. The stdlib mode remains fully usable.
+z3-solver>=4.12
+sympy>=1.12
+fpylll>=0.6
+playwright>=1.40
+requests>=2.31

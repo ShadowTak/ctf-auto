@@ -41,6 +41,14 @@ LOGIN_PATHS = ["/login", "/signin", "/sign-in", "/admin", "/admin/login",
 PIN_HINT_RE = re.compile(r"(?i)(4[\s-]?digit|pin|passcode|pass[\s-]?code|otp)")
 
 
+def _field_info(field):
+    """Normalize legacy ``(name, type)`` and value-aware field tuples."""
+    name = field[0]
+    field_type = field[1] if len(field) > 1 else ""
+    value = field[2] if len(field) > 2 else ""
+    return name, (field_type or "").lower(), value
+
+
 def _load_wordlist_passwords():
     words = []
     try:
@@ -73,15 +81,19 @@ def _find_login_forms(base, page_html):
         mm = re.search(r"<form[^>]*method=[\"']([^\"']*)[\"']", block, re.I)
         method = (mm.group(1) if mm else "post").lower()
         fields = []
-        for m in re.finditer(
-                r"<(?:input|textarea)[^>]*name=[\"']([^\"' ]+)[\"']",
-                block, re.I):
-            n = html_mod.unescape(m.group(1))
-            t = re.search(r"<input[^>]*name=[\"']" + re.escape(n) +
-                          r"[\"'][^>]*type=[\"']([^\"']*)[\"']",
-                          block, re.I | re.S)
-            ftype = (t.group(1) if t else "").lower()
-            fields.append((n, ftype))
+        for tag_match in re.finditer(
+                r"<(?:input|textarea)\b[^>]*>", block, re.I | re.S):
+            tag = tag_match.group(0)
+            nm = re.search(r"\bname=[\"']([^\"']+)[\"']", tag, re.I)
+            if not nm:
+                continue
+            n = html_mod.unescape(nm.group(1))
+            tm = re.search(r"\btype=[\"']([^\"']*)[\"']", tag, re.I)
+            ftype = (tm.group(1) if tm else
+                     ("textarea" if tag.lower().startswith("<textarea") else "text")).lower()
+            vm = re.search(r"\bvalue=[\"']([^\"']*)[\"']", tag, re.I)
+            fields.append((n, ftype,
+                           html_mod.unescape(vm.group(1)) if vm else ""))
         if fields:
             forms.append((target, fields, method))
     return forms
@@ -89,7 +101,11 @@ def _find_login_forms(base, page_html):
 
 def _baseline_fail(target, fields, method):
     """One clearly-wrong login to fingerprint the failure shape."""
-    data = {n: "___definitely_wrong___" for n, _ in fields}
+    data = {}
+    for field in fields:
+        name, field_type, value = _field_info(field)
+        data[name] = value if field_type in ("hidden", "submit") else \
+            "___definitely_wrong___"
     if method == "get":
         qs = urllib.parse.urlencode(data)
         r = httpx.get(target + ("&" if "?" in target else "?") + qs, timeout=8)
@@ -134,7 +150,11 @@ def _try_creds(target, fields, method, creds, baseline, findings, flags,
             break
         data = {}
         pw_field = None
-        for n, t in fields:
+        for field in fields:
+            n, t, value = _field_info(field)
+            if t in ("hidden", "submit"):
+                data[n] = value
+                continue
             if t == "password":
                 data[n] = pwd
                 pw_field = n
@@ -145,7 +165,8 @@ def _try_creds(target, fields, method, creds, baseline, findings, flags,
                 data[n] = user
         if pw_field is None:
             # no explicit password field detected; assume last field
-            for n, t in reversed(fields):
+            for field in reversed(fields):
+                n, t, _value = _field_info(field)
                 data[n] = pwd
                 break
         if method == "get":

@@ -8,6 +8,7 @@ proxy (absolute-URI form for http, CONNECT tunnel for https).
 """
 import gzip
 import http.client
+import json
 import re
 import socket
 import ssl
@@ -15,6 +16,7 @@ import threading
 import time
 import urllib.parse
 import zlib
+from http.cookies import SimpleCookie
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -31,6 +33,90 @@ _MAX_REDIRECTS = 5
 # Session-wide settings configured via configure() / run.py CLI flags
 _GLOBAL_HEADERS = {}
 _PROXY_URL = None
+_COOKIE_JAR = {}
+_COOKIE_LOCK = threading.RLock()
+
+
+def _merge_cookie_header(value):
+    """Merge a ``Cookie`` header into the process-local scan cookie jar."""
+    if not value:
+        return
+    cookie = SimpleCookie()
+    try:
+        cookie.load(str(value))
+    except Exception:
+        cookie = None
+    with _COOKIE_LOCK:
+        if cookie:
+            for key, morsel in cookie.items():
+                _COOKIE_JAR[key] = morsel.value
+        else:
+            for part in str(value).split(";"):
+                name, sep, val = part.strip().partition("=")
+                if sep and name:
+                    _COOKIE_JAR[name.strip()] = val.strip()
+
+
+def cookie_snapshot():
+    with _COOKIE_LOCK:
+        return dict(_COOKIE_JAR)
+
+
+def cookie_header():
+    with _COOKIE_LOCK:
+        return "; ".join(f"{k}={v}" for k, v in _COOKIE_JAR.items())
+
+
+def auth_snapshot():
+    return _GLOBAL_HEADERS.get("Authorization") or \
+        _GLOBAL_HEADERS.get("authorization")
+
+
+def _learn_auth(body, response_headers):
+    """Learn a bearer token from a JSON login response when safe to do so."""
+    content_type = str(response_headers.get("content-type", "")).lower()
+    if "json" not in content_type:
+        return
+    try:
+        value = json.loads(body.decode("utf-8", "replace"))
+    except Exception:
+        return
+    token_keys = {"token", "access_token", "id_token", "jwt"}
+    found = None
+    stack = [value]
+    while stack and found is None:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if str(key).lower() in token_keys and isinstance(child, str):
+                    if len(child) >= 20:
+                        found = child
+                        break
+                elif isinstance(child, (dict, list)):
+                    stack.append(child)
+        elif isinstance(item, list):
+            stack.extend(item)
+    if found and not any(str(k).lower() == "authorization"
+                         for k in _GLOBAL_HEADERS):
+        _GLOBAL_HEADERS["Authorization"] = (
+            found if found.lower().startswith(("bearer ", "basic "))
+            else "Bearer " + found)
+
+
+def _store_set_cookie(value):
+    if not value:
+        return
+    cookie = SimpleCookie()
+    try:
+        cookie.load(str(value))
+    except Exception:
+        return
+    with _COOKIE_LOCK:
+        for key, morsel in cookie.items():
+            if morsel.value == "" and morsel["max-age"] == "0":
+                _COOKIE_JAR.pop(key, None)
+            else:
+                _COOKIE_JAR[key] = morsel.value
 
 
 def configure(headers=None, cookie=None, proxy=None, timeout=None,
@@ -49,7 +135,12 @@ def configure(headers=None, cookie=None, proxy=None, timeout=None,
     if headers:
         _GLOBAL_HEADERS.update({str(k): str(v) for k, v in headers.items()})
     if cookie:
-        _GLOBAL_HEADERS["Cookie"] = cookie.strip()
+        _merge_cookie_header(cookie.strip())
+        # Keep explicit per-scan cookies in the jar rather than a stale global
+        # header so login responses can add/replace session cookies.
+        for key in list(_GLOBAL_HEADERS):
+            if key.lower() == "cookie":
+                _GLOBAL_HEADERS.pop(key, None)
     if timeout:
         global _TIMEOUT
         _TIMEOUT = max(1, int(timeout))
@@ -68,6 +159,8 @@ def reset_session():
     global _PROXY_URL
     _GLOBAL_HEADERS.clear()
     _PROXY_URL = None
+    with _COOKIE_LOCK:
+        _COOKIE_JAR.clear()
 
 
 def _proxy_parts():
@@ -142,6 +235,16 @@ class _ConnPool:
             except Exception:
                 pass
 
+    def close(self):
+        """Close pooled connections owned by the current thread."""
+        conns = self._conns()
+        for conn in list(conns.values()):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        conns.clear()
+
 
 _POOL = _ConnPool(_TIMEOUT)
 
@@ -191,6 +294,10 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
     hdrs.setdefault("Accept", "*/*")
     hdrs.setdefault("Accept-Encoding", "gzip, deflate")
     hdrs.setdefault("Connection", "keep-alive")
+    if not any(str(k).lower() == "cookie" for k in hdrs):
+        jar_cookie = cookie_header()
+        if jar_cookie:
+            hdrs["Cookie"] = jar_cookie
     if proxy and "Host" not in {k.lower() for k in hdrs}:
         hdrs["Host"] = host
 
@@ -203,8 +310,21 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
             conn.request(method, request_target, body=data, headers=hdrs)
             resp = conn.getresponse()
             body = resp.read()
-            r_headers = {k.lower(): v for k, v in resp.getheaders()}
+            raw_headers = resp.getheaders()
+            r_headers = {}
+            set_cookies = []
+            for key, value in raw_headers:
+                low_key = key.lower()
+                if low_key == "set-cookie":
+                    set_cookies.append(value)
+                else:
+                    r_headers[low_key] = value
+            if set_cookies:
+                r_headers["set-cookie"] = "\n".join(set_cookies)
+                for set_cookie in set_cookies:
+                    _store_set_cookie(set_cookie)
             body = _decompress(body, r_headers)
+            _learn_auth(body, r_headers)
             return Resp(resp.status, r_headers, body, url, reason=resp.reason)
         except (http.client.HTTPException, OSError, socket.timeout,
                 ssl.SSLError, ValueError):

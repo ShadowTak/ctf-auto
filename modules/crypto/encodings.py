@@ -383,6 +383,11 @@ def dec_url(s):
 
 
 def dec_unicode(s):
+    # ``unicode_escape`` emits deprecation warnings for arbitrary strings
+    # such as ``\\O``. Only invoke it when the input contains a real Python
+    # escape sequence; this also cuts a noisy false-positive decoder path.
+    if not re.search(r"\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{2}|N\{[^}]+\})", s):
+        return None
     try:
         out = s.encode().decode("unicode_escape")
         if out != s and is_printable_text(out):

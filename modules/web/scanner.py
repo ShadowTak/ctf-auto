@@ -4,6 +4,7 @@ error trigger, backups, injection fuzz, login brute, cookies) run CONCURRENTLY
 after dirbust — each is internally threaded already, so wall time drops from
 the sum of phases to the slowest phase."""
 from core import httpx
+from core.evidence import findings_from_flags
 from core.flag import extract_flags
 from core.output import flag_line, info_line, ok_line, section, warn_line
 from . import assets as assets_mod
@@ -261,3 +262,19 @@ def run_web(target, interactive=False):
     else:
         warn_line("ยังไม่เจอ flag — ลองรัน injections กับ endpoint อื่น หรือดู source")
     return flags
+
+
+def run_web_evidence(target, interactive=False):
+    """Run the legacy web scanner and classify returned values as candidates.
+
+    A scanner finding is not scoreboard proof by itself, so callers receive
+    evidence-aware candidates while ``run_web`` keeps returning ``list[str]``.
+    """
+    flags = run_web(target, interactive=interactive)
+    return findings_from_flags(
+        flags,
+        source="web:scanner",
+        verified=False,
+        confidence=0.78,
+        evidence=("flag-shaped value returned by scanner",),
+    )
