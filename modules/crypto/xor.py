@@ -116,9 +116,16 @@ def _assemble(data, key):
 
 
 # Common CTF flag prefixes used as cribs for XOR key recovery
-FLAG_PREFIXES = [
-    (prefix + "{").encode() for prefix in flaglib.known_prefixes()
-]
+FLAG_PREFIXES = []
+_SEEN_PREFIXES = set()
+for _prefix in flaglib.known_prefixes():
+    # Case is part of the plaintext crib. Deduplicate only exact spellings;
+    # ``flag{`` and ``Flag{`` are different valid formats.
+    _prefix_key = _prefix
+    if _prefix_key in _SEEN_PREFIXES:
+        continue
+    _SEEN_PREFIXES.add(_prefix_key)
+    FLAG_PREFIXES.append((_prefix + "{").encode())
 
 
 def _refine_key(data, key, score_fn, rounds=3):
@@ -179,13 +186,10 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
         return []
     if keylen_hint is None:
         if len(data) <= 300:
-            # try every plausible length; short texts fool hamming/IC
-            # heuristics. Keys above ~18 are vanishingly rare in CTFs and
-            # each extra length costs a full 256x-column sweep.
+            # Short texts fool Hamming/IC heuristics. Keep the bounded sweep,
+            # but do not let key lengths larger than half the input dominate.
             keylens = list(range(2, min(18, len(data) // 2) + 1))
         else:
-            # longer texts: hamming-distance heuristic is reliable, and brute
-            # forcing every length gets expensive on long inputs
             keylens = _guess_keysize(data)
     else:
         keylens = [keylen_hint]
@@ -217,7 +221,8 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
     # key lengths — the greedy pass already separates those out
     all_results.sort(key=lambda x: x[0])
     refined = []
-    # hopeless greedy output -> skip the expensive refine+anneal entirely
+    # Greedy per-column chi is cheap and stable for the short CTF payloads
+    # this path targets. Refine only the two best printable candidates.
     if all_results and all_results[0][0] < 260:
         for ts, ks, key, plain in all_results[:2]:
             rkey, rts = _refine_key(data, key, text_score)
@@ -239,6 +244,43 @@ def repeating_key_xor(data, top=5, keylen_hint=None):
             for _, ks, key, plain in final[:top]]
 
 
+def _flag_body(text):
+    """Return the body of a complete flag-shaped plaintext for validation.
+
+    This is not used to rewrite output. A crib result must contain its own
+    prefix and closing brace before it is eligible for the heuristic path.
+    """
+    match = re.fullmatch(
+        r"[A-Za-z0-9_-]{2,30}\{([^{}\r\n]{2,300})\}",
+        text.strip(),
+    )
+    if not match:
+        return None
+    body = match.group(1)
+    if not any(ch.isalnum() for ch in body):
+        return None
+    return body
+
+
+def _junk_body(text):
+    """True when a crib 'flag' body is clearly fabricated.
+
+    Blind prefix sweeps FORCE the first bytes to spell a known prefix on
+    ANY data; the solved tail then comes out as low-diversity mush like
+    'ee4eeeaeadeeoo9tnvo'. Real flag bodies almost never repeat one
+    character that heavily. Also rejects bodies that contain another '{'
+    (nested-braces nonsense from misaligned keys)."""
+    body = _flag_body(text)
+    if body is None:
+        return True
+    if len(body) >= 8:
+        from collections import Counter
+        top = Counter(body).most_common(1)[0][1]
+        if top / len(body) > 0.35:
+            return True
+    return False
+
+
 def crib_attack(data, prefixes=None):
     """Recover a repeating key when the plaintext starts with a known flag
     prefix. The prefix fixes the first key bytes; remaining key bytes are
@@ -248,51 +290,93 @@ def crib_attack(data, prefixes=None):
 
     data = _to_bytes(data)
     out = []
+    seen_bodies = {}
+    selected_prefixes = []
+    seen_prefixes = set()
     for prefix in (prefixes or FLAG_PREFIXES):
+        prefix = prefix.encode() if isinstance(prefix, str) else bytes(prefix)
+        prefix_key = prefix
+        if prefix_key not in seen_prefixes:
+            seen_prefixes.add(prefix_key)
+            selected_prefixes.append(prefix)
+
+    # The unknown key bytes depend on the ciphertext and key length, not on
+    # the guessed prefix. Solve each key length once, then apply each crib.
+    tail_keys = {}
+    for ks in range(2, min(24, len(data) // 2) + 1):
+        key = bytearray(ks)
+        for pos in range(ks):
+            col = data[pos::ks]
+            best_k, best_s = 0, float("inf")
+            for k in range(256):
+                s = score_bytes(bytes(b ^ k for b in col))
+                if s < best_s:
+                    best_s, best_k = s, k
+            key[pos] = best_k
+        tail_keys[ks] = key
+
+    for prefix in selected_prefixes:
         if len(data) < len(prefix):
             continue
-        for ks in range(2, min(24, len(data) // 2) + 1):
-            key = bytearray(ks)
+        for ks, solved_key in tail_keys.items():
+            key = solved_key.copy()
             know = min(ks, len(prefix))
             for i in range(know):
                 key[i] = data[i] ^ prefix[i]
-            if ks > len(prefix):
-                # cheap gate: with the known key bytes the first full period
-                # must already be printable ASCII, else this is not the key
-                probe = _assemble(data[:ks * 2], key)
+            # Every byte of the known prefix must match, including when the
+            # key is longer than the crib. This prevents case-mismatched or
+            # partially guessed prefixes from becoming fake flags.
+            if _assemble(data[:len(prefix)], key) != prefix:
+                continue
+            trial_keys = [(key, ks <= len(prefix))]
+            # A one-byte unknown tail is cheap to exhaust and matters for
+            # short real keys (for example a 6-byte key with a 5-byte
+            # ``flag{`` crib). Frequency analysis alone can pick the wrong
+            # byte when a column is very short.
+            if ks > know and ks - know == 1:
+                unknown_pos = know
+                trial_keys = []
+                for value in range(256):
+                    trial = key.copy()
+                    trial[unknown_pos] = value
+                    trial_keys.append((trial, False))
+
+            for trial_key, verified in trial_keys:
+                plain = _assemble(data, trial_key)
                 try:
-                    if not is_printable_text(probe.decode("latin-1")):
-                        continue
+                    text = plain.decode("latin-1")
                 except Exception:
                     continue
-            for pos in range(know, ks):
-                col = data[pos::ks]
-                best_k, best_s = 0, float("inf")
-                for k in range(256):
-                    s = score_bytes(bytes(b ^ k for b in col))
-                    if s < best_s:
-                        best_s, best_k = s, k
-                key[pos] = best_k
-            plain = _assemble(data, key)
-            try:
-                text = plain.decode("latin-1")
-            except Exception:
-                continue
-            if not is_printable_text(text):
-                continue
-            s = text_score(text)
-            if s != float("inf") and s < 80:
-                out.append(
-                    (f"crib={prefix.decode(errors='replace')} keylen={ks} key={bytes(key)!r}",
-                     text)
-                )
-    # Sort: flag-like results first (contain curly braces), then by score
+                if not is_printable_text(text):
+                    continue
+                s = text_score(text)
+                if s == float("inf") or s >= 80 or _junk_body(text):
+                    continue
+                # family guard: the SAME body re-wrapped under many
+                # different prefixes is the signature of a blind sweep on
+                # non-XOR data — keep only the first representative
+                body = _flag_body(text)
+                if body is None:
+                    continue
+                body_key = body[:14].lower()
+                prev = seen_bodies.get(body_key)
+                if prev is not None and prev != prefix:
+                    continue
+                seen_bodies[body_key] = prefix
+                mode = "verified" if verified else "heuristic"
+                out.append((verified, s,
+                            f"crib-{mode} keylen={ks} key={bytes(trial_key)!r}",
+                            text))
+    # The returned text is the raw plaintext, so rank by the full plaintext
+    # score while keeping verified key-period matches first.
     def _sort_key(item):
-        _, text = item
-        has_flag = 1 if re.search(r'[A-Za-z]{2,}\{[^}]{2,}\}', text) else 0
-        return (-has_flag, text_score(text))
+        verified, score, _label, _text = item
+        return (-int(verified), score)
     out.sort(key=_sort_key)
-    return out[:20]
+    # Prefix cribs are heuristic. One best candidate is useful; twenty
+    # prefix-wrapped variants are noise and are exactly how false flags leak
+    # into the UI.
+    return [(label, text) for _verified, _score, label, text in out[:1]]
 
 
 def known_plaintext_xor(data, known):

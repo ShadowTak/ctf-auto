@@ -35,9 +35,37 @@ def _rank(candidates):
             s = float("inf")
         if s == float("inf"):
             continue
+        # gated crib decodes are high-precision — surface them first
+        if label.startswith(("xor-crib", "crib")):
+            s -= 1000.0
         scored.append((s, label, text))
     scored.sort(key=lambda x: x[0])
     return scored[:MAX_CANDIDATES]
+
+
+def _filter_flag_families(flags):
+    """Drop fabricated flag families: the SAME body appearing under >=3
+    different prefixes is the fingerprint of blind crib sweeps on data
+    that was never really XOR-with-that-prefix."""
+    from collections import defaultdict
+    fam_prefixes = defaultdict(set)
+    parsed = []
+    for f in flags:
+        i, j = f.find("{"), f.rfind("}")
+        body = f[i + 1:j] if 0 <= i < j else f
+        key = "".join(c for c in body[:14] if c.isalnum()).lower()
+        prefix = f[:i].lower() if i > 0 else ""
+        parsed.append((f, key, prefix))
+        fam_prefixes[key].add(prefix)
+    out = []
+    seen = set()
+    for f, key, prefix in parsed:
+        if key and len(fam_prefixes[key]) >= 3:
+            continue
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
 
 
 def _flag_hits(text):
@@ -297,7 +325,19 @@ def analyze_text(text):
     # but is the answer, and must never be dropped by the ranking cutoff
     for entry in results:
         if isinstance(entry, (tuple, list)) and entry:
+            label = str(entry[0]) if len(entry) >= 2 else ""
             cand_text = entry[-1] if len(entry) >= 2 else str(entry)
+            if label.startswith("xor-crib"):
+                # A heuristic crib is useful decode output, but the guessed
+                # prefix is not proof that this is a flag. Only a complete
+                # prefix/key-period match may enter the flag list.
+                if "xor-crib crib-verified" not in label:
+                    continue
+                for f in _flag_hits(cand_text):
+                    if f not in seen:
+                        seen.add(f)
+                        all_flags.append(f)
+                continue
             for f in _flag_hits(cand_text):
                 if f not in seen:
                     seen.add(f)
@@ -306,7 +346,7 @@ def analyze_text(text):
         if f not in seen:
             seen.add(f)
             all_flags.append(f)
-    return ranked, all_flags
+    return ranked, _filter_flag_families(all_flags)
 
 
 def _length_ext_job(text):
@@ -591,7 +631,7 @@ def analyze_file(path, as_binary=None):
                 results.append(payload)
 
     ranked = _rank(results)
-    return ranked, flags
+    return ranked, _filter_flag_families(flags)
 
 
 def _companion_lcg(path, data, results_ref=None):
@@ -701,9 +741,9 @@ def run_crypto(target, interactive=False):
     if ranked:
         print()
         ok_line(f"ผล decode ที่น่าสนใจ ({len(ranked)} อันดับแรก):")
-        for i, (score, label, text) in enumerate(ranked[:12], 1):
+        for shown_count, (score, label, text) in enumerate(ranked[:12], 1):
             shown = text.strip().replace("\n", " ")[:120]
-            print(f"  {i:2}. [{score:8.1f}] {label}: {shown}")
+            print(f"  {shown_count:2}. [{score:8.1f}] {label}: {shown}")
             if len(text) > 120:
                 print(f"      ... (total {len(text)} chars)")
     else:

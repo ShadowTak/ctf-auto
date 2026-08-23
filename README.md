@@ -28,6 +28,7 @@
 - Classic เพิ่ม **Beaufort / Variant Beaufort / Gronsfeld** (hill-climb + simulated annealing + beam), **keyboard-shift**, **T9 multi-tap**, **Polybius**
 - Structured JSON dispatcher เพิ่ม ECC fields (`p,a,b,gx,gy,qx,qy`) และ `{algorithm:"xtea",key,ciphertext}`
 - **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
+- **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
 
 **Web เพิ่มใหม่**
 - **Session controls**: `--cookie "k=v"`, `--header "K: V"` (ใส่ซ้ำได้), `--proxy http://127.0.0.1:8080`, `--timeout`, `--user-agent` — scan โจทย์ที่ต้อง login ก่อน / ผ่าน Burp ได้
@@ -284,6 +285,7 @@ python3 run.py --category full --target 10.10.10.5      # auto: scan → เจ�
 - flag ทุกตัวที่เจอขึ้นที่หน้าจอ + บันทึกใน `reports/<timestamp>/`
 - รู้จัก prefix ของหลายเวที (picoCTF, HTB, THCTT, NCSA, redacted และอื่นๆ) + generic candidate เช่น `customEvent{...}`
 - ถ้าโจทย์ระบุ `prefix=` หรือ `flag_format=` จะใช้ prefix นั้นกับ solver ที่ต้องสร้าง flag; ถ้าไม่ระบุจะคืน plaintext/candidate โดยไม่เดาเป็น `redactedCTF{...}`
+- ผล decode ที่เป็นข้อความเพี้ยนยังแสดงตาม raw output เพื่อให้ตรวจสอบเองได้; ระบบไม่ห่อข้อความนั้นเป็น flag อัตโนมัติ
 
 ## อ้างอิง / แรงบันดาลใจ
 
