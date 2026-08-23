@@ -4,6 +4,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from modules.web.browser import _network_route_is_interesting
 from modules.web.discovery import crawl
 
 
@@ -18,9 +19,16 @@ class _DiscoveryHandler(BaseHTTPRequestHandler):
             "/": ("text/html", b'<a href="/app">app</a><a href="/openapi.json">api</a><script src="/app.js"></script>'),
             "/app": ("text/html", b'<form action="/api/search"><input name="q"></form>'),
             "/app.js": ("application/javascript", b'fetch("/api/hidden");'),
+            "/app.js.map": ("application/json", json.dumps({
+                "sources": ["src/app.ts"],
+                "sourcesContent": ["const flag = 'MAP{source_map_ok}';"],
+            }).encode()),
             "/api/hidden": ("text/plain", b"redacted{discovery_ok}"),
             "/openapi.json": ("application/json", json.dumps({
                 "paths": {"/api/openapi-secret": {"get": {}}}}).encode()),
+            "/v3/api-docs": ("application/json", json.dumps({
+                "paths": {"/v1/unlinked": {
+                    "post": {"operationId": "unlinked_secret"}}}}).encode()),
         }
         content_type, body = routes.get(self.path.split("?", 1)[0],
                                         ("text/plain", b"not found"))
@@ -44,10 +52,25 @@ class WebDiscoveryTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
         self.assertIn("redacted{discovery_ok}", flags)
+        self.assertIn("MAP{source_map_ok}", flags)
         self.assertIn("app.js", paths)
+        self.assertIn("app.js.map", paths)
         self.assertIn("api/hidden", paths)
+        self.assertIn("v1/unlinked", paths)
+        self.assertTrue(any("API operation POST /v1/unlinked" in line
+                            for line in findings))
         self.assertTrue(any("form GET" in line for line in findings))
         self.assertGreaterEqual(len(pages), 3)
+
+    def test_spa_route_classifier_covers_non_api_names(self):
+        self.assertTrue(_network_route_is_interesting(
+            "http://127.0.0.1:1/v1/hidden", "fetch"))
+        self.assertTrue(_network_route_is_interesting(
+            "http://127.0.0.1:1/query", "xhr"))
+        self.assertTrue(_network_route_is_interesting(
+            "http://127.0.0.1:1/report.json", "document"))
+        self.assertFalse(_network_route_is_interesting(
+            "http://127.0.0.1:1/assets/app.js", "script"))
 
 
 if __name__ == "__main__":

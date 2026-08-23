@@ -148,6 +148,78 @@ def _labeled_payloads(text):
     return out
 
 
+_NESTED_KEY_RE = re.compile(
+    r"(?i)(?:cipher|crypt|enc(?:rypted)?|payload|token|secret|hidden|blob|"
+    r"message|data|value|content|private|public|key|nonce|iv|mac|hash)")
+_JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+
+
+def _nested_payloads(text, max_items=24):
+    """Find encoded-looking leaf strings inside JSON/config artifacts.
+
+    Structured attacks still receive the whole object.  This companion pass
+    sends likely payload leaves through the complete decoder pipeline, which
+    is important for records such as {"data": {"token": "b64(b64(flag))"}}.
+    It is deliberately bounded and skips ordinary prose to keep the fast
+    path fast and avoid classic-cipher noise.
+    """
+    import json
+    from .common import looks_like_encoding
+
+    try:
+        root = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(root, (dict, list)):
+        return []
+    output, seen = [], set()
+
+    def visit(value, path, depth=0, key_hint=""):
+        if len(output) >= max_items or depth > 8:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                visit(child, f"{path}.{key}", depth + 1, str(key))
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]", depth + 1, key_hint)
+            return
+        if not isinstance(value, str):
+            return
+        candidate = value.strip().strip("`'\"")
+        if len(candidate) < 6 or len(candidate) > 20_000 or candidate in seen:
+            return
+        known, candidates = flaglib.extract_flags(candidate)
+        encoded = looks_like_encoding(candidate)
+        jwt_like = bool(_JWT_RE.fullmatch(candidate))
+        key_like = bool(_NESTED_KEY_RE.search(key_hint))
+        explicit = bool(known or candidates or jwt_like)
+        if not (explicit or encoded or (key_like and len(candidate) >= 12)):
+            return
+        seen.add(candidate)
+        output.append((path, candidate))
+
+    visit(root, "$", 0)
+    return output
+
+
+def _nested_payload_job(text):
+    results = []
+    for path, payload in _nested_payloads(text):
+        try:
+            sub_ranked, sub_flags = analyze_text(payload)
+        except Exception:
+            continue
+        for score, label, output in sub_ranked:
+            results.append((score, f"json[{path}] -> {label}", output))
+        # Direct flags are normally present in sub_ranked, but retain them as
+        # a fallback when a solver exposes a flag only through its side list.
+        for value in sub_flags:
+            results.append((0.0, f"json[{path}] -> nested-flag", value))
+    return results
+
+
 def _fernet_job(text):
     """Fernet token detection + wordlist key brute."""
     try:
@@ -274,6 +346,7 @@ def _analyze_text_uncached(text):
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
         ("structured", lambda: structured_mod.analyze(text)),
+        ("nested-json", lambda: _nested_payload_job(text)),
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
         ("length-ext", lambda: _length_ext_job(text)),
@@ -442,6 +515,8 @@ def analyze_text_evidence(text):
     def deterministic_label(label):
         """Only a direct, validated decoder can promote a flag to verified."""
         low = str(label).lower().strip()
+        if "->" in low:
+            low = low.rsplit("->", 1)[1].strip()
         if low.startswith("chain["):
             return False  # intermediate chain stages are candidates
         if low.startswith("chain-best("):

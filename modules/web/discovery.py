@@ -15,7 +15,13 @@ from core.flag import extract_flags
 
 MAX_BODY = 1_500_000
 SKIP_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg",
-                 ".css", ".woff", ".woff2", ".ttf", ".map")
+                 ".css", ".woff", ".woff2", ".ttf")
+COMMON_DISCOVERY_PATHS = (
+    "/openapi.json", "/swagger.json", "/api-docs", "/v2/api-docs",
+    "/v3/api-docs", "/swagger/v1/swagger.json", "/swagger/index.html",
+    "/redoc", "/graphql", "/graphiql", "/api/schema", "/api/docs",
+    "/.well-known/openapi.json", "/actuator/mappings",
+)
 SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|client[_-]?secret|secret|token|password|passwd|"
     r"authorization|private[_-]?key)\s*[:=]\s*[\"']([^\"'\s]{6,180})[\"']")
@@ -100,6 +106,31 @@ def _find_json_paths(value):
     return found
 
 
+def _find_api_operations(value):
+    """Return useful HTTP operations from OpenAPI-like JSON documents."""
+    methods = {"get", "post", "put", "patch", "delete", "head", "options"}
+    found = []
+    if not isinstance(value, dict):
+        return found
+    paths_obj = value.get("paths")
+    if not isinstance(paths_obj, dict):
+        return found
+    for route, operations in paths_obj.items():
+        if not isinstance(route, str) or not route.startswith("/"):
+            continue
+        if not isinstance(operations, dict):
+            continue
+        for method, operation in operations.items():
+            method_lower = str(method).lower()
+            if method_lower not in methods:
+                continue
+            summary = ""
+            if isinstance(operation, dict):
+                summary = operation.get("operationId") or operation.get("summary") or ""
+            found.append((method_lower.upper(), route, str(summary).strip()))
+    return found
+
+
 def _extract_urls(base, body, content_type):
     links = set()
     parser = _HTMLLinks()
@@ -139,9 +170,21 @@ def _scan_response(base, url, response):
         script_url = _to_url(url, source)
         if script_url:
             links.add(script_url)
-            links.add(script_url + ".map")
+            parsed_script = urllib.parse.urlparse(script_url)
+            map_url = urllib.parse.urlunparse(
+                (parsed_script.scheme, parsed_script.netloc,
+                 parsed_script.path + ".map", "", parsed_script.query, ""))
+            links.add(map_url)
             paths.add(_path(script_url))
-            paths.add(_path(script_url + ".map"))
+            paths.add(_path(map_url))
+    try:
+        value = json.loads(body)
+        for method, route, summary in _find_api_operations(value):
+            paths.add(route.lstrip("/"))
+            suffix = f" ({summary})" if summary else ""
+            findings.append(f"  [i] API operation {method} {route}{suffix}")
+    except (TypeError, ValueError):
+        pass
     for match in SECRET_RE.finditer(body):
         key, value = match.group(1), match.group(2)
         if value.lower() not in {key.lower(), "changeme", "xxxxxxxx"}:
@@ -154,12 +197,25 @@ def _scan_response(base, url, response):
 def crawl(base, seed_urls=None, max_pages=36, max_depth=2, workers=12):
     """Crawl same-origin pages and return findings, flags and useful paths."""
     base = base.rstrip("/")
-    seeds = {_to_url(base + "/", value) for value in (seed_urls or [base + "/"])}
-    queue = [(item, 0) for item in seeds if item]
+    default_seeds = seed_urls is None
+    seed_values = [base + "/"] if default_seeds else seed_urls
+    queue = []
+    fallback_queue = []
+    for value in seed_values:
+        item = _to_url(base + "/", value)
+        if item and item not in {url for url, _ in queue}:
+            queue.append((item, 0))
+    if default_seeds:
+        for value in COMMON_DISCOVERY_PATHS:
+            item = _to_url(base + "/", value)
+            if item:
+                fallback_queue.append((item, 1))
     visited, findings, flags, paths = set(), [], [], set()
     pages = []
 
-    while queue and len(visited) < max_pages:
+    while (queue or fallback_queue) and len(visited) < max_pages:
+        if not queue:
+            queue, fallback_queue = fallback_queue, []
         current = []
         while queue and len(current) < min(workers, max_pages - len(visited)):
             url, depth = queue.pop(0)
