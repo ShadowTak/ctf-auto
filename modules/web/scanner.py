@@ -26,8 +26,32 @@ from . import login as login_mod
 from . import recon as recon_mod
 
 
-def run_web(target, interactive=False, use_browser=False):
-    """Public entry. target = URL. Returns list of flags found."""
+def _cookie_headers(response):
+    """Return Set-Cookie values, including cookies learned across redirects."""
+    if response is None:
+        return []
+    headers = response.headers
+    values = headers.get_all("set-cookie") if hasattr(headers, "get_all") else []
+    if not values:
+        value = headers.get("set-cookie")
+        if value:
+            values = [value]
+    if not values:
+        values = [f"{name}={value}"
+                  for name, value in httpx.cookie_snapshot().items()]
+    return values
+
+
+def run_web(target, interactive=False, use_browser=False, reset_session=True):
+    """Public entry. target = URL. Returns list of flags found.
+
+    A scan owns its cookie/auth state by default. This prevents a batch such
+    as auto-lab from carrying a flag cookie or bearer token from target A into
+    target B. Callers running an intentional authenticated multi-target flow
+    can opt out with ``reset_session=False``.
+    """
+    if reset_session:
+        httpx.reset_session()
     section("🌐 WEB SCAN")
     base = httpx.normalize_url(target)
     info_line(f"target: {base}")
@@ -201,11 +225,9 @@ def run_web(target, interactive=False, use_browser=False):
 
     def phase_cookies():
         lines, fl = [], []
-        set_cookies = probe.headers.get_all("set-cookie") if hasattr(probe.headers, "get_all") else []
-        if not set_cookies:
-            sc = probe.headers.get("set-cookie")
-            if sc:
-                set_cookies = [sc]
+        # httpx follows redirects and stores Set-Cookie in its session jar;
+        # _cookie_headers recovers it when the final response has no header.
+        set_cookies = _cookie_headers(probe)
         if not set_cookies:
             return ["  [!] ไม่พบ cookie"], []
         cookies = cookies_mod.parse_cookies(set_cookies)

@@ -58,6 +58,7 @@
 
 **Web เพิ่มใหม่**
 - **Session controls**: `--cookie "k=v"`, `--header "K: V"` (ใส่ซ้ำได้), `--proxy http://127.0.0.1:8080`, `--timeout`, `--user-agent` — scan โจทย์ที่ต้อง login ก่อน / ผ่าน Burp ได้
+- **Redirect-aware cookies**: อ่าน cookie จาก session jar แม้ `Set-Cookie` จะอยู่ใน redirect ก่อนหน้า จึงตรวจ/forge signed หรือ base64-JSON cookie ได้ครบ; แต่ละ target จะ reset auth state อัตโนมัติเพื่อไม่ให้ flag/token ปนข้ามโจทย์ (ตั้ง `reset_session=False` ได้เมื่อจงใจใช้ session ร่วม)
 - **UNION-based SQLi automation**: หา param -> นับ column (ORDER BY sweep) -> หา echo column -> exfil version/tables/flag columns + time-based blind probe
 - **Flask session takeover**: decode -> brute `SECRET_KEY` (รองรับทั้ง Flask salt `cookie-session` และ raw itsdangerous salt, hmac/django-concat derivation) -> forge admin cookie -> hit protected paths (flask-unsign โดยไม่ต้อง pip)
 - **CBC padding oracle** (Vaudenay + last-byte disambiguation) + IV bit-flip — หา encrypt/decrypt endpoints อัตโนมัติ
