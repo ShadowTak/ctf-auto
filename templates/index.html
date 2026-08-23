@@ -459,12 +459,14 @@ function renderResults(data) {
     if (r.type === 'flag') {
       html += `<div class="r-item flag-found">
         <div class="label"><span class="badge badge-flag">🏁 ${escHtml((r.status || 'verified').toUpperCase())} FLAG</span></div>
-        <div class="value">${escHtml(r.flag)}</div>
+        <div class="value">${escHtml(r.flag)}
+          <small class="method">${escHtml(r.source || '')}${r.evidence && r.evidence.length ? ' · ' + escHtml(r.evidence.join(' → ')) : ''}</small>
+        </div>
       </div>`;
     } else if (r.type === 'candidate') {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-decode">CANDIDATE</span></div>
-        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small></div>
+        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${r.evidence && r.evidence.length ? `<small class="method"> · ${escHtml(r.evidence.join(' → '))}</small>` : ''}</div>
       </div>`;
     } else if (r.type === 'decode') {
       html += `<div class="r-item">

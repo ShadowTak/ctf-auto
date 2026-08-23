@@ -5,7 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core import flag as flaglib
-from core.evidence import EvidenceLedger
+from core.evidence import EvidenceLedger, decode_trace
 from core.output import flag_line, info_line, ok_line, section, warn_line
 from . import encodings
 from . import classic
@@ -39,6 +39,10 @@ def _rank(candidates):
         # gated crib decodes are high-precision — surface them first
         if label.startswith(("xor-crib", "crib")):
             s -= 1000.0
+        elif label.startswith(("hash(", "kdf(")):
+            # A verified dictionary/KDF match is stronger evidence than a
+            # high-English-score heuristic decode.
+            s -= 800.0
         scored.append((s, label, text))
     scored.sort(key=lambda x: x[0])
     return scored[:MAX_CANDIDATES]
@@ -72,9 +76,10 @@ def _filter_flag_families(flags):
 def _flag_hits(text):
     if isinstance(text, bytes):
         text = text.decode("latin-1", "replace")
+    # Keep the decoded bytes literal.  In particular, do not turn a naked
+    # token such as ``DUCTFsecret`` into a made-up ``DUCTF{secret}`` flag.
     known, cands = flaglib.extract_flags(text)
-    wrapped = flaglib.wrap_known_prefix(text)
-    return known + cands + wrapped
+    return known + cands
 
 
 def _try_rsa_params(text):
@@ -84,10 +89,10 @@ def _try_rsa_params(text):
 
     vals = {}
     # pattern: n = <digits> (also "n:", "n:" etc.)
-    for key in ("n", "e", "c", "d", "p", "q"):
-        m = re.search(rf"(?im)^\s*{key}\s*[=:]\s*(\d+)\s*$", text)
+    for key in ("n", "e", "c", "c1", "c2", "d", "p", "q", "delta"):
+        m = re.search(rf"(?im)^\s*{key}\s*[=:]\s*(0x[0-9a-f]+|\d+)\s*$", text)
         if m:
-            vals[key] = int(m.group(1))
+            vals[key] = int(m.group(1), 0)
     # Also look for n1/n2 pattern (shared-prime RSA)
     n1_val = re.search(r"(?im)^\s*n1\s*[=:]\s*(\d+)\s*$", text)
     n2_val = re.search(r"(?im)^\s*n2\s*[=:]\s*(\d+)\s*$", text)
@@ -105,6 +110,12 @@ def _try_rsa_params(text):
     if "n" not in vals or "e" not in vals:
         return []
     results = []
+    if all(key in vals for key in ("c1", "c2", "delta")):
+        recovered = rsa_mod.franklin_reiter(
+            vals["c1"], vals["c2"], vals["n"], vals["e"], vals["delta"])
+        if recovered is not None:
+            results.append(("rsa-franklin-reiter",
+                            rsa_mod.long_to_bytes(recovered).decode("utf-8", "replace")))
     for label, pt in rsa_mod.crack_rsa(
         n=vals.get("n"), e=vals.get("e"), c=vals.get("c"),
         d=vals.get("d"), p=vals.get("p"), q=vals.get("q"),
@@ -248,7 +259,6 @@ def analyze_text(text):
 
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
-        ("chain-decode", lambda: _chain_decode_job(text)),
         ("structured", lambda: structured_mod.analyze(text)),
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
@@ -257,6 +267,18 @@ def analyze_text(text):
         ("prng", lambda: _prng_job(text)),
         ("xor", lambda: xor_mod.crack_xor(text)),
     ] + jobs_extra
+    structured_input = bool(re.match(r"\s*[\[{]", text))
+    kdf_input = bool(re.search(r"(?i)(?:pbkdf2_sha256|pbkdf2-sha(?:256|512)|\$argon2|\$scrypt\$)", text))
+    parameter_input = bool(re.search(r"(?im)^\s*(?:n|p|g|e|c|cipher|ciphertext)\s*[=:]", text))
+    if structured_input or kdf_input or parameter_input:
+        # The generic repeating-key XOR search is expensive and has a high
+        # false-positive rate on deterministic parameter/KDF artifacts.
+        jobs = [item for item in jobs if item[0] != "xor"]
+    # Chain/classic/annealing solvers are valuable on free-form ciphertext,
+    # but waste most of the time on JSON/KDF/parameter artifacts whose
+    # structured path is deterministic and independently verifiable.
+    if encoded or (not structured_input and not kdf_input and not parameter_input):
+        jobs.append(("chain-decode", lambda: _chain_decode_job(text)))
     # Bacon's cipher is a 5-bit grouping over 0/1 (or A/B) — a binary-
     # looking string is *exactly* its signature, yet looks_like_encoding
     # classifies "100010..." as hex and skips the classic solvers. Run it
@@ -269,13 +291,13 @@ def analyze_text(text):
                 return []
 
         jobs.append(("bacon", _bacon_job))
-    if not encoded:
+    if not encoded and not structured_input and not kdf_input and not parameter_input:
         # classic ciphers (caesar/vigenere/substitution/…) only make sense
         # on language-like text, not on base64/hex blobs
         jobs.append(("classic", lambda: classic.try_all_classic(text)))
         jobs.append(("vigenere-auto",
                      lambda: [("vigenere", classic.vigenere_decrypt(text)[1])]))
-    else:
+    elif not structured_input and not kdf_input:
         # XOR ciphertext is frequently base64-wrapped — also run XOR on the
         # decoded layers, but LIGHT (single-byte + crib only; the full
         # repeating-key anneal on every decode is what made this explode)
@@ -321,6 +343,20 @@ def analyze_text(text):
     ranked = _rank(results)
     all_flags = []
     seen = set()
+    # If a non-chain solver already produced a known-prefix flag, discard
+    # generic brace-shaped ghosts from later ROT13/leet chain stages.  When
+    # there is no such anchor, keep chain stages because the final plaintext
+    # may genuinely be discovered at an intermediate-looking step (for
+    # example hex -> rot13).
+    known_nonchain = set()
+    for entry in results:
+        if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+            continue
+        label = str(entry[0])
+        if label.startswith(("chain[", "xor-", "classic", "vigenere")):
+            continue
+        for value in flaglib.extract_flags(entry[-1], include_candidates=False)[0]:
+            known_nonchain.add(value)
     # collect flags from EVERY solver output, not just the top-ranked 25 —
     # a cracked-hash flag like 'redactedCTF{chocolate}' scores poorly as text
     # but is the answer, and must never be dropped by the ranking cutoff
@@ -328,6 +364,19 @@ def analyze_text(text):
         if isinstance(entry, (tuple, list)) and entry:
             label = str(entry[0]) if len(entry) >= 2 else ""
             cand_text = entry[-1] if len(entry) >= 2 else str(entry)
+            # Intermediate chain stages are useful in the ranked decode list,
+            # but are not final answers and often create ROT13/leet ghosts of
+            # a real flag.  Let chain-best/final solver results report them.
+            if label.startswith("chain["):
+                chain_hits = _flag_hits(cand_text)
+                if known_nonchain:
+                    chain_hits = [value for value in chain_hits
+                                  if value in known_nonchain]
+                for value in chain_hits:
+                    if value not in seen:
+                        seen.add(value)
+                        all_flags.append(value)
+                continue
             if label.startswith("xor-crib"):
                 # A heuristic crib is useful decode output, but the guessed
                 # prefix is not proof that this is a flag. Only a complete
@@ -368,7 +417,7 @@ def analyze_text_evidence(text):
         if low.startswith("chain["):
             return False  # intermediate chain stages are candidates
         if low.startswith("chain-best("):
-            return ">" not in low and "xor" not in low
+            return "xor" not in low
         return low.split(" ", 1)[0] in {
             "base16", "base32", "base32hex", "base45", "base58",
             "base62", "base85", "ascii85", "hex", "url", "unicode",
@@ -390,6 +439,7 @@ def analyze_text_evidence(text):
                     confidence=0.92 if verified else
                     (0.58 if heuristic else 0.68),
                     evidence=("flag-shaped plaintext", f"score={score:.2f}"),
+                    trace=decode_trace(label),
                 )
         elif str(label).startswith("xor-crib"):
             ledger.add(
@@ -398,6 +448,7 @@ def analyze_text_evidence(text):
                 source=f"crypto:{label}",
                 confidence=0.58,
                 evidence=("known-prefix crib", "raw plaintext preserved"),
+                trace=decode_trace(label),
             )
     for value in legacy_flags:
         if value not in observed:
@@ -441,6 +492,12 @@ def _chain_decode_job(text):
 def _hash_crack(text):
     """Crack any hex hash found in the text. If the file carries a flag
     template like 'redactedCTF{<password>}', substitute the cracked value."""
+    from . import kdf
+    words = _wordlist_candidates()
+    for token in re.findall(r"(?:pbkdf2_sha256\$[^\s]+|pbkdf2-sha(?:256|512)\$[^\s]+)", text):
+        cracked = kdf.crack_kdf(token, words)
+        if cracked:
+            return [(f"kdf({kdf.identify_kdf(token)})=cracked", cracked)]
     for h in re.findall(r"[0-9a-fA-F]{8,128}", text):
         names = hashes_mod.identify_hash(h)
         cracked = hashes_mod.crack_hash(h)
@@ -793,9 +850,19 @@ def run_crypto(target, interactive=False):
     else:
         ranked, flags = analyze_text(target)
 
+    # The legacy API also returns generic brace-shaped candidates.  Keep
+    # those visible in the decode ranking, but reserve the prominent FLAG
+    # section for a known/explicit flag prefix so heuristic ROT13/XOR ghosts
+    # cannot be mistaken for accepted answers.
+    display_flags = []
+    for value in flags:
+        known, _ = flaglib.extract_flags(value, include_candidates=False)
+        if known and value not in display_flags:
+            display_flags.append(value)
+
     print()
-    if flags:
-        for f in flags:
+    if display_flags:
+        for f in display_flags:
             flag_line(f"FLAG: {f}")
     else:
         warn_line("ยังไม่เจอ flag โดยตรง — ดูผล decode ข้างล่าง")
@@ -805,7 +872,9 @@ def run_crypto(target, interactive=False):
         ok_line(f"ผล decode ที่น่าสนใจ ({len(ranked)} อันดับแรก):")
         for shown_count, (score, label, text) in enumerate(ranked[:12], 1):
             shown = text.strip().replace("\n", " ")[:120]
-            print(f"  {shown_count:2}. [{score:8.1f}] {label}: {shown}")
+            trace = " -> ".join(decode_trace(label))
+            trace_suffix = f" [trace: {trace}]" if trace else ""
+            print(f"  {shown_count:2}. [{score:8.1f}] {label}{trace_suffix}: {shown}")
             if len(text) > 120:
                 print(f"      ... (total {len(text)} chars)")
     else:

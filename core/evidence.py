@@ -12,6 +12,19 @@ from .flag import extract_flags
 _KIND_RANK = {"decode": 0, "candidate": 1, "verified": 2}
 
 
+def decode_trace(label):
+    """Turn a solver label into a compact human-readable decode path."""
+    label = str(label or "").strip()
+    if label.startswith("chain-best(") and ")" in label:
+        body = label[len("chain-best("):label.find(")")]
+        return tuple(part.strip() for part in body.split(">") if part.strip())
+    if label.startswith("chain[") and "=" in label:
+        return (label.split("=", 1)[1].strip(),)
+    if "->" in label:
+        return tuple(part.strip() for part in label.split("->") if part.strip())
+    return (label,) if label else ()
+
+
 @dataclass
 class Finding:
     value: str
@@ -62,7 +75,8 @@ class EvidenceLedger:
         return str(value).strip()
 
     def add(self, value, *, kind="decode", source="unknown", confidence=0.0,
-            evidence: Optional[Iterable[str]] = None):
+            evidence: Optional[Iterable[str]] = None,
+            trace: Optional[Iterable[str]] = None):
         if value is None:
             return None
         raw = str(value)
@@ -71,11 +85,13 @@ class EvidenceLedger:
             return None
         kind = _clean_kind(kind)
         evidence = tuple(str(x) for x in (evidence or ()) if str(x))
+        trace = tuple(str(x) for x in (trace or ()) if str(x))
         source = str(source or "unknown")
         old = self._items.get(key)
         if old is None:
             item = Finding(raw, kind, source, max(0.0, float(confidence)),
-                           evidence, (source,))
+                           evidence + (("decode trace: " + " -> ".join(trace),)
+                                       if trace else ()), (source,))
             self._items[key] = item
             return item
 
@@ -83,15 +99,18 @@ class EvidenceLedger:
             old.kind = kind
         old.confidence = max(old.confidence, float(confidence))
         old.evidence = tuple(dict.fromkeys(old.evidence + evidence))
+        if trace:
+            old.evidence = tuple(dict.fromkeys(
+                old.evidence + ("decode trace: " + " -> ".join(trace),)))
         old.sources = tuple(dict.fromkeys(old.sources + (source,)))
         old.source = old.sources[0] if len(old.sources) == 1 else ",".join(old.sources)
         return old
 
     def add_flag(self, value, *, source="unknown", verified=False,
-                 confidence=0.0, evidence=None):
+                 confidence=0.0, evidence=None, trace=None):
         kind = "verified" if verified else "candidate"
         return self.add(value, kind=kind, source=source,
-                        confidence=confidence, evidence=evidence)
+                        confidence=confidence, evidence=evidence, trace=trace)
 
     def extend(self, findings):
         for finding in findings or ():

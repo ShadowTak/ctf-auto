@@ -214,6 +214,80 @@ def hastad_broadcast(pairs):
     return None
 
 
+def _poly_trim(poly, n):
+    while len(poly) > 1 and poly[-1] % n == 0:
+        poly.pop()
+    return [x % n for x in poly]
+
+
+def _poly_sub(left, right, n):
+    size = max(len(left), len(right))
+    return _poly_trim([
+        (left[i] if i < len(left) else 0) -
+        (right[i] if i < len(right) else 0)
+        for i in range(size)
+    ], n)
+
+
+def _poly_mul(left, right, n):
+    out = [0] * (len(left) + len(right) - 1)
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            out[i + j] = (out[i + j] + a * b) % n
+    return _poly_trim(out, n)
+
+
+def _poly_divmod(left, right, n):
+    left = _poly_trim(left[:], n)
+    right = _poly_trim(right[:], n)
+    if right == [0]:
+        raise ZeroDivisionError("polynomial division by zero")
+    quotient = [0] * max(1, len(left) - len(right) + 1)
+    inv = pow(right[-1], -1, n)
+    while left != [0] and len(left) >= len(right):
+        degree = len(left) - len(right)
+        factor = left[-1] * inv % n
+        quotient[degree] = factor
+        for i, value in enumerate(right):
+            left[degree + i] = (left[degree + i] - factor * value) % n
+        left = _poly_trim(left, n)
+    return _poly_trim(quotient, n), left
+
+
+def franklin_reiter(c1, c2, n, e, delta):
+    """Recover m from ``c1=m**e`` and ``c2=(m+delta)**e`` modulo n.
+
+    This is the classic related-message attack. The polynomial GCD path is
+    intentionally bounded to small public exponents and verifies both
+    ciphertext equations before returning the message.
+    """
+    if int(e) < 2 or int(e) > 7:
+        return None
+    n, e, delta = int(n), int(e), int(delta)
+    # x^e - c1 and (x+delta)^e - c2
+    first = [(-int(c1)) % n] + [0] * (e - 1) + [1]
+    second = [(-int(c2)) % n]
+    power = [1]
+    for _ in range(e):
+        power = _poly_mul(power, [delta % n, 1], n)
+    second = _poly_sub(power, [int(c2) % n], n)
+    try:
+        a, b = first, second
+        for _ in range(32):
+            if b == [0]:
+                break
+            _, remainder = _poly_divmod(a, b, n)
+            a, b = b, remainder
+        gcd = _poly_trim(a, n)
+        if len(gcd) != 2:
+            return None
+        root = (-gcd[0] * pow(gcd[1], -1, n)) % n
+    except (ValueError, ZeroDivisionError):
+        return None
+    return root if pow(root, e, n) == int(c1) % n and \
+        pow((root + delta) % n, e, n) == int(c2) % n else None
+
+
 def shared_prime_attack(n1, n2, e, c):
     """Two moduli sharing a prime factor (broken RNG). Compute gcd(n1,n2)."""
     shared = math.gcd(n1, n2)

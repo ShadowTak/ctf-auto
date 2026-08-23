@@ -18,6 +18,10 @@ from . import rsa
 from . import modern
 from . import ecc
 from . import blockciphers
+from . import aead
+from . import dh
+from . import signatures
+from . import lattice
 from core.flag import infer_prefixes
 
 
@@ -104,6 +108,22 @@ def _rsa_results(obj):
             for label, pt in rsa.crack_rsa(n=n, e=e, c=c, p=p, q=q, n2=n2):
                 out.append(("structured-rsa-" + label, pt))
 
+        # Bounded univariate small-root inputs.  The lattice adapter verifies
+        # roots modulo n; malformed/oversized instances simply produce none.
+        polynomial = _get(mapping, "polynomial", "poly")
+        bound = _int(_get(mapping, "root_bound", "bound"))
+        if n and isinstance(polynomial, list) and bound:
+            roots = lattice.coppersmith_univariate(polynomial, n, bound)
+            for root in roots:
+                out.append(("structured-rsa-coppersmith-root", str(root)))
+        prefix = _get(mapping, "known_prefix", "message_prefix")
+        unknown_bytes = _int(_get(mapping, "unknown_bytes", "suffix_bytes"))
+        if n and e and c is not None and prefix is not None and unknown_bytes is not None:
+            for root in lattice.rsa_known_prefix_roots(
+                    c, n, e, prefix, unknown_bytes,
+                    _get(mapping, "known_suffix", "message_suffix") or b""):
+                out.append(("structured-rsa-coppersmith-prefix", root))
+
         # Common modulus: n, e1/e2, c1/c2 encrypt the same message.
         e1 = _int(_get(mapping, "e1"))
         e2 = _int(_get(mapping, "e2"))
@@ -163,6 +183,17 @@ def _rsa_results(obj):
                             out.append(("structured-rsa-hastad", _plain(m)))
                 except (ValueError, ZeroDivisionError):
                     pass
+
+        # Franklin-Reiter: two related messages under the same RSA modulus.
+        delta = _int(_get(mapping, "delta", "message_delta", "difference"))
+        if n and e and c is not None and delta is not None:
+            c2_related = _int(_get(mapping, "c2", "related_ciphertext",
+                                   "ciphertext2"))
+            if c2_related is not None:
+                recovered = rsa.franklin_reiter(c, c2_related, n, e, delta)
+                if recovered is not None:
+                    out.append(("structured-rsa-franklin-reiter",
+                                _plain(recovered)))
     return out
 
 
@@ -176,18 +207,95 @@ def _ecdsa_results(obj):
         if not (n and r and isinstance(t1, dict) and isinstance(t2, dict)):
             continue
         s1, s2 = _int(_get(t1, "s")), _int(_get(t2, "s"))
+        r1, r2 = _int(_get(t1, "r")), _int(_get(t2, "r"))
+        if s1 is None:
+            try:
+                r1, s1 = signatures.decode_dss_signature(
+                    _get(t1, "signature", "sig", "der"))
+            except (TypeError, ValueError):
+                pass
+        if s2 is None:
+            try:
+                r2, s2 = signatures.decode_dss_signature(
+                    _get(t2, "signature", "sig", "der"))
+            except (TypeError, ValueError):
+                pass
         z1, z2 = _int(_get(t1, "z", "hash")), _int(_get(t2, "z", "hash"))
         enc = _bytes(_get(mapping, "encrypted_flag_hex", "ciphertext_hex"))
-        if None in (s1, s2, z1, z2) or not enc:
+        if None in (s1, s2, z1, z2) or not enc or r1 != r2:
             continue
         try:
-            k = ((z1 - z2) * pow((s1 - s2) % n, -1, n)) % n
-            private = ((s1 * k - z1) * pow(r, -1, n)) % n
+            recovered = signatures.recover_reused_nonce(
+                n, r1 or r, s1, z1, s2, z2)
+            if recovered is None:
+                continue
+            private, _k = recovered
             key = hashlib.sha256(hex(private).encode()).digest()
             plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(enc))
             out.append(("structured-ecdsa-nonce-reuse", plain))
         except (ValueError, ZeroDivisionError):
             pass
+    return out
+
+
+def _generic_dh_results(obj):
+    """Recover finite-field DH secrets and decrypt XOR-style challenge data."""
+    out = []
+    for mapping in _walk(obj):
+        p = _int(_get(mapping, "p", "prime", "modulus"))
+        g = _int(_get(mapping, "g", "generator", "base"))
+        public_a = _int(_get(mapping, "A", "alice_public", "public_a"))
+        public_b = _int(_get(mapping, "B", "bob_public", "public_b"))
+        private_a = _int(_get(mapping, "a_private", "alice_private"))
+        factors = _get(mapping, "prime_factors_p_minus_1", "factors")
+        if not (p and g and (public_a or private_a)):
+            continue
+        try:
+            secret_a = private_a
+            if secret_a is None:
+                secret_a = dh.recover_dh_private(
+                    public_a, p, g, factors=factors, order=p - 1)
+            if secret_a is None:
+                continue
+            out.append(("structured-dh-private-recovered",
+                        f"a = {secret_a} (verified)"))
+            shared = None
+            if public_b is not None:
+                shared = pow(public_b, secret_a, p)
+                out.append(("structured-dh-shared-secret",
+                            f"shared = {shared}"))
+            enc = _bytes(_get(mapping, "encrypted_flag", "encrypted_flag_hex",
+                              "ciphertext", "ciphertext_hex"))
+            if shared is not None and enc:
+                for label, key in dh.derive_key_candidates(shared):
+                    plain = bytes(byte ^ key[i % len(key)]
+                                  for i, byte in enumerate(enc))
+                    out.append((f"structured-dh-xor[{label}]", plain))
+        except (ValueError, TypeError, ZeroDivisionError):
+            continue
+    return out
+
+
+def _aead_results(obj):
+    out = []
+    for mapping in _walk(obj):
+        algorithm = _get(mapping, "algorithm", "mode", "cipher_mode")
+        key = _get(mapping, "key", "key_hex", "secret")
+        ciphertext = _get(mapping, "ciphertext", "ct", "encrypted_flag",
+                           "encrypted_flag_hex")
+        if isinstance(algorithm, str) and key is not None and ciphertext is not None:
+            plain = aead.decrypt_aes(
+                algorithm, key, ciphertext,
+                iv=_get(mapping, "iv", "initialization_vector"),
+                nonce=_get(mapping, "nonce", "iv"),
+                tag=_get(mapping, "tag", "auth_tag"),
+                aad=_get(mapping, "aad", "associated_data",) or b"")
+            if plain is not None:
+                out.append((f"structured-aes-{algorithm.lower()}", plain))
+        records = _get(mapping, "records", "messages", "encryptions")
+        if isinstance(records, list):
+            out.extend(aead.nonce_reuse_records(records))
+            out.extend(aead.gcm_nonce_reuse_analysis(records))
     return out
 
 
@@ -454,6 +562,8 @@ def analyze(text):
         results.extend(_lcg_results(obj))
         results.extend(_stream_reuse_results(obj))
         results.extend(_dh_results(obj))
+        results.extend(_generic_dh_results(obj))
+        results.extend(_aead_results(obj))
         results.extend(_autokey_results(obj))
         results.extend(_mt_results(obj))
         results.extend(_ecdlp_results(obj))

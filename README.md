@@ -30,6 +30,15 @@
 - **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
 - **XOR crib แสดง plaintext ที่ถอดได้ตรงตัว** — ไม่ตัด/เติม `CTF{}` หรือ wrapper เอง; ผล crib แบบ heuristic จะแสดงเป็น `DECODE` และจะไม่ถูกนับเป็น flag จนกว่าจะยืนยัน prefix/key-period ได้
 - **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
+- **Decode trace** — ผลที่ได้จากการถอดจะแสดง method/path ที่ใช้ เช่น `base64 -> hex -> rot13`; solver จะตัดงาน classic/annealing ที่ไม่เกี่ยวกับ JSON/KDF/RSA parameter dump เพื่อให้ deterministic inputs เร็วขึ้น
+
+**Crypto เพิ่มเติม**
+
+- Finite-field math: CRT, Tonelli–Shanks, BSGS, Pohlig–Hellman และ DH private/shared-secret recovery พร้อม verification
+- RSA: Franklin–Reiter related-message และ bounded univariate Coppersmith/small-root สำหรับ artifact ที่ระบุ polynomial หรือ known prefix
+- Signatures: DER ECDSA/DSA parsing และ reused-nonce/private-key recovery
+- Modern symmetric: AES CTR/CFB/OFB/GCM/EAX/CCM/OCB/SIV decryption เมื่อมี PyCryptodome, stream nonce reuse และ one-block GCM H/mask recovery
+- Hash/KDF: PBKDF2 Django/modular format parsing และ bounded wordlist cracking; raw decoded plaintext ยังแสดงตรงตามผลจริง ไม่เติม prefix ใหม่
 
 **Image forensics เพิ่มใหม่**
 
