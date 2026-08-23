@@ -11,8 +11,10 @@ from . import assets as assets_mod
 from . import advanced as advanced_mod
 from . import backups as backups_mod
 from . import blind_sqli as blind_mod
+from . import browser as browser_mod
 from . import cookies as cookies_mod
 from . import ctr_bitflip as ctr_mod
+from . import discovery as discovery_mod
 from . import deser as deser_mod
 from . import directories as dirs_mod
 from . import errors as errors_mod
@@ -24,7 +26,7 @@ from . import login as login_mod
 from . import recon as recon_mod
 
 
-def run_web(target, interactive=False):
+def run_web(target, interactive=False, use_browser=False):
     """Public entry. target = URL. Returns list of flags found."""
     section("🌐 WEB SCAN")
     base = httpx.normalize_url(target)
@@ -55,6 +57,31 @@ def run_web(target, interactive=False):
         if js_paths:
             ok_line(f"JS เผย endpoint เพิ่ม {len(js_paths)} path")
             extra_paths.extend(js_paths)
+
+    # 2b) bounded recursive discovery: navigation/forms/JS/source maps and
+    # OpenAPI/Swagger JSON are often the only place a challenge exposes its
+    # real API routes. Keep it bounded so the exploit phases stay predictable.
+    print()
+    print("── Recursive route / API discovery ──")
+    discovery_findings, discovery_flags, discovered_paths, discovered_pages = \
+        discovery_mod.crawl(base, max_pages=36, max_depth=2, workers=12)
+    for line in discovery_findings:
+        print(line)
+    flags.extend(discovery_flags)
+    extra_paths.extend(discovered_paths)
+    if discovered_pages:
+        ok_line(f"ค้นหน้า/endpoint เพิ่ม {len(discovered_pages)} รายการ, route {len(discovered_paths)} รายการ")
+    if use_browser:
+        print()
+        print("── Dynamic browser/API discovery (read-only) ──")
+        browser_findings, browser_flags, browser_paths, browser_error = \
+            browser_mod.crawl_dynamic(base)
+        for line in browser_findings:
+            print(line)
+        if browser_error:
+            warn_line(f"browser discovery: {browser_error}")
+        flags.extend(browser_flags)
+        extra_paths.extend(browser_paths)
 
     # 3) directory brute force
     print()

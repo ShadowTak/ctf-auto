@@ -117,7 +117,7 @@ def _run_image(jid, filepath):
                    {"type": "image", "section": "format", "data": json.dumps(
                        {"format": report["format"], "summary": report["summary"],
                         "file": report["file"]}, ensure_ascii=False)}]
-        for section_name in ("metadata", "chunks", "anomalies", "text", "strings",
+        for section_name in ("metadata", "chunks", "embedded", "anomalies", "text", "strings",
                              "stego", "signatures", "decodes", "tools"):
             values = report.get(section_name)
             if values:
@@ -142,13 +142,13 @@ def _run_image(jid, filepath):
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-def _run_web_once(jid, url):
+def _run_web_once(jid, url, use_browser=False):
     try:
         from core.evidence import findings_from_flags
         from modules.web.scanner import run_web
         results = []
         results.append({"type": "target", "url": url})
-        output = run_web(url, interactive=False)
+        output = run_web(url, interactive=False, use_browser=use_browser)
         if isinstance(output, dict):
             for k, v in output.items():
                 results.append({"type": "scan", "section": k,
@@ -171,7 +171,7 @@ def _run_web_once(jid, url):
         _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
 
 
-def _run_web(jid, url):
+def _run_web(jid, url, use_browser=False):
     """Run one web job with an isolated process-local HTTP session.
 
     The solver modules intentionally share cookies and learned auth headers
@@ -183,7 +183,7 @@ def _run_web(jid, url):
     with _web_scan_lock:
         httpx.reset_session()
         try:
-            _run_web_once(jid, url)
+            _run_web_once(jid, url, use_browser=use_browser)
         finally:
             httpx.reset_session()
             httpx.close_pool()
@@ -245,7 +245,8 @@ def api_scan():
             return jsonify({"job_id": jid})
         if not url.startswith("http"):
             url = "https://" + url
-        t = threading.Thread(target=_run_web, args=(jid, url), daemon=True)
+        t = threading.Thread(target=_run_web, args=(jid, url),
+                             kwargs={"use_browser": bool(data.get("browser"))}, daemon=True)
         t.start()
 
     elif category == "network":

@@ -51,9 +51,9 @@ def input_target(hint="URL (เช่น http://10.10.10.5:8080 / path ไฟล
 # ---------------------------------------------------------------------------
 # Category runners
 # ---------------------------------------------------------------------------
-def run_web(target):
+def run_web(target, **kwargs):
     from modules.web.scanner import run_web as _run
-    return _run(target)
+    return _run(target, **kwargs)
 
 
 def run_crypto(target):
@@ -406,7 +406,7 @@ def dispatch(args):
     report = Report()
     flags = []
     if args.category == "web":
-        flags = run_web(args.target)
+        flags = run_web(args.target, use_browser=args.browser)
     elif args.category == "crypto":
         flags = run_crypto(args.target)
     elif args.category == "network":
@@ -498,6 +498,8 @@ def main():
                         help="override User-Agent")
     parser.add_argument("--pro", action="store_true",
                         help="เปิด optional solver/browser capabilitiesถ้ามีติดตั้ง")
+    parser.add_argument("--browser", action="store_true",
+                        help="ใช้ Playwright render SPA และเก็บ API routes แบบ read-only")
     parser.add_argument("--auto-lab", nargs="?", const="all", default=None,
                         choices=["web", "crypto", "all"],
                         help="สแกนแลปใน stack อัตโนมัติ (web / crypto / all)")

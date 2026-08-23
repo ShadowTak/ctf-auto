@@ -4,8 +4,10 @@ import struct
 import tempfile
 import unittest
 import zlib
+import zipfile
 
 from modules.image.forensics import analyze_image
+from modules.image.pixel_stego import extract_pixel_planes
 
 
 def _png_chunk(kind, payload):
@@ -54,6 +56,50 @@ class ImageForensicsTests(unittest.TestCase):
         json.dumps(report, ensure_ascii=False)
         self.assertEqual(report["format"], "unknown")
         self.assertTrue(report["strings"]["ascii"])
+
+    def test_embedded_zip_is_inspected_in_memory(self):
+        payload = b"DUCTF{embedded_zip_ok}\n"
+        archive = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        archive.close()
+        try:
+            with zipfile.ZipFile(archive.name, "w") as zf:
+                zf.writestr("secret.txt", payload)
+            with open(archive.name, "rb") as handle:
+                embedded = handle.read()
+            image_handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            image_handle.close()
+            path = image_handle.name
+            with open(path, "wb") as handle:
+                handle.write(_make_png() + embedded)
+            report = analyze_image(path, run_tools=False)
+            self.assertTrue(report["embedded"])
+            self.assertIn("DUCTF{embedded_zip_ok}", report["verified_flags"])
+        finally:
+            for target in (archive.name, locals().get("path")):
+                if target and os.path.exists(target):
+                    os.unlink(target)
+
+    def test_pixel_lsb_flag_is_recovered(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        text = b"DUCTF{pixel_lsb_ok}"
+        bits = [(byte >> shift) & 1 for byte in text for shift in range(7, -1, -1)]
+        pixels = [(bit, 0, 0) for bit in bits]
+        pixels += [(0, 0, 0)] * (64 * 64 - len(pixels))
+        image = Image.new("RGB", (64, 64))
+        image.putdata(pixels)
+        handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        handle.close()
+        try:
+            image.save(handle.name)
+            results, error = extract_pixel_planes(handle.name)
+            self.assertIsNone(error)
+            self.assertTrue(any("DUCTF{pixel_lsb_ok}" in item["output"]
+                                for item in results))
+        finally:
+            os.unlink(handle.name)
 
 
 if __name__ == "__main__":

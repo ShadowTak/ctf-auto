@@ -9,6 +9,7 @@ import base64
 import binascii
 import collections
 import hashlib
+import io
 import json
 import math
 import os
@@ -17,6 +18,8 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import tarfile
+import zipfile
 import zlib
 
 from core.evidence import EvidenceLedger
@@ -528,6 +531,57 @@ def scan_signatures(data):
     return sorted(out, key=lambda x: x["offset"])
 
 
+def inspect_embedded_payloads(data, signatures):
+    """Inspect bounded embedded archives without extracting to disk."""
+    reports = []
+    for signature in signatures:
+        offset = int(signature.get("offset", 0))
+        kind = signature.get("type")
+        if offset <= 0 or offset >= len(data):
+            continue
+        payload_offset = max(0, offset - 257) if kind == "TAR" else offset
+        payload = data[payload_offset:payload_offset + MAX_READ]
+        try:
+            if kind == "ZIP":
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    members = []
+                    for info in archive.infolist()[:80]:
+                        item = {"name": info.filename, "size": info.file_size,
+                                "compressed": info.compress_size}
+                        if not info.is_dir() and info.file_size <= 512 * 1024:
+                            raw = archive.read(info)
+                            text = _printable(raw)
+                            if text:
+                                item["text"] = _clip(text, 4096)
+                        members.append(item)
+                    reports.append({"type": kind, "offset": offset,
+                                    "members": members})
+            elif kind == "GZIP":
+                raw = zlib.decompress(payload, 16 + zlib.MAX_WBITS)
+                reports.append({"type": kind, "offset": offset,
+                                "text": _clip(_printable(raw), 4096),
+                                "size": len(raw)})
+            elif kind == "TAR":
+                with tarfile.open(fileobj=io.BytesIO(payload), mode="r:*") as archive:
+                    members = []
+                    for info in archive.getmembers()[:80]:
+                        item = {"name": info.name, "size": info.size,
+                                "type": str(info.type)}
+                        if info.isfile() and info.size <= 512 * 1024:
+                            handle = archive.extractfile(info)
+                            raw = handle.read() if handle else b""
+                            text = _printable(raw)
+                            if text:
+                                item["text"] = _clip(text, 4096)
+                        members.append(item)
+                    reports.append({"type": kind, "offset": offset,
+                                    "members": members})
+        except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError,
+                EOFError, zlib.error):
+            continue
+    return _unique(reports, 40)
+
+
 def _tool(name, args, timeout=18):
     path = shutil.which(name)
     if not path:
@@ -583,7 +637,11 @@ def _decode_texts(texts, ledger):
         value = _text(value).strip()
         if not value or len(value) < 4:
             continue
-        _flag_evidence(ledger, value, source, verified=True, confidence=.94)
+        stego_source = str(source).lower()
+        is_stego = ("pixel" in stego_source or "bit-plane" in stego_source
+                    or "stego" in stego_source)
+        _flag_evidence(ledger, value, source, verified=not is_stego,
+                       confidence=.68 if is_stego else .94)
         if len(value) <= 5000 and (re.fullmatch(r"[A-Za-z0-9+/=_-]{8,}", value) or
                                    re.fullmatch(r"[0-9a-fA-F :,-]{8,}", value) or
                                    "\\" in value or "  " in value):
@@ -623,6 +681,7 @@ def analyze_image(path, run_tools=True):
                  "entropy": _ratio_entropy(data), "magic": magic},
         "format": fmt, "metadata": [], "text": [], "strings": {},
         "chunks": [], "stego": [], "signatures": scan_signatures(data),
+        "embedded": [],
         "anomalies": [], "tools": [], "decodes": [], "findings": [],
     }
     if fmt == "PNG":
@@ -647,6 +706,15 @@ def analyze_image(path, run_tools=True):
     report["stego"] = _unique(parsed.get("stego", []))
     report["trailing_bytes"] = parsed.get("trailing_bytes", 0)
     report["strings"] = extract_strings(data)
+    report["embedded"] = inspect_embedded_payloads(data, report["signatures"])
+    try:
+        from .pixel_stego import extract_pixel_planes
+        pixel_results, pixel_note = extract_pixel_planes(path)
+        report["stego"] = _unique(report["stego"] + pixel_results)
+        if pixel_note:
+            report["anomalies"].append(pixel_note)
+    except Exception as exc:  # optional backend must never break core parsing
+        report["anomalies"].append(f"pixel-plane scan unavailable: {exc}")
     expected_extension = {"PNG": "png", "JPEG": "jpg", "GIF": "gif",
                           "BMP": "bmp", "WebP": "webp"}.get(fmt)
     if expected_extension and extension and extension not in (expected_extension, "jpeg"):
@@ -680,6 +748,13 @@ def analyze_image(path, run_tools=True):
             text_inputs.append((f"strings:{kind}", value))
     for item in report["stego"]:
         text_inputs.append((item.get("method", "stego"), item.get("output", "")))
+    for item in report["embedded"]:
+        for member in item.get("members", []):
+            if member.get("text"):
+                text_inputs.append((f"embedded:{item.get('type')}:{member.get('name')}",
+                                    member["text"]))
+        if item.get("text"):
+            text_inputs.append((f"embedded:{item.get('type')}", item["text"]))
     for item in report["tools"]:
         output = item.get("output", "")
         if output:
@@ -695,7 +770,9 @@ def analyze_image(path, run_tools=True):
         "anomalies": len(report["anomalies"]),
         "strings": sum(len(v) for v in report["strings"].values()),
         "stego_decodes": len(report["stego"]), "derived_decodes": len(report["decodes"]),
-        "signatures": len(report["signatures"]), "tools_run": sum(1 for x in report["tools"] if x.get("available")),
+        "signatures": len(report["signatures"]),
+        "embedded": len(report["embedded"]),
+        "tools_run": sum(1 for x in report["tools"] if x.get("available")),
         "verified_flags": len(report["verified_flags"]), "candidate_flags": len(report["candidate_flags"]),
     }
     return report
@@ -723,6 +800,10 @@ def run_image(path, run_tools=True):
         section("Stego bit-plane candidates")
         for item in report["stego"]:
             warn_line(f"{item.get('method')}: {item.get('output')}")
+    if report["embedded"]:
+        section("Embedded archive payloads")
+        for item in report["embedded"]:
+            info_line(json.dumps(item, ensure_ascii=False, default=str)[:MAX_TEXT])
     if report["signatures"]:
         section("Embedded / polyglot signatures")
         for item in report["signatures"]:

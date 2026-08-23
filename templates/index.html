@@ -250,6 +250,9 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
         <input type="url" id="web-url" placeholder="https://target.ctf.com or http://10.10.10.1:8080">
         <button class="btn btn-primary" onclick="runScan('web')">▶ Scan</button>
       </div>
+      <label style="display:block;margin-top:10px;color:var(--text3);font-size:.82rem">
+        <input type="checkbox" id="web-browser"> ใช้ browser render SPA / เก็บ API calls (read-only)
+      </label>
     </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:-8px">
       Auto-detects: recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, GraphQL, JWT, cookie forge, AES-CTR bit-flip, login brute, backup leak, flag scan
@@ -385,6 +388,7 @@ function runScan(category) {
 
   if (category === 'web') {
     body.url = document.getElementById('web-url').value.trim();
+    body.browser = document.getElementById('web-browser').checked;
     if (!body.url) return alert('Enter a URL');
   } else if (category === 'crypto') {
     body.text = document.getElementById('crypto-text').value.trim();

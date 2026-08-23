@@ -32,6 +32,11 @@
 - **Evidence mode** — Web UI แยก `VERIFIED FLAG`, `CANDIDATE` และ raw `DECODE` พร้อม source, confidence และ evidence; legacy CLI/API ยังคืน `list[str]` ได้เหมือนเดิม
 - **Decode trace** — ผลที่ได้จากการถอดจะแสดง method/path ที่ใช้ เช่น `base64 -> hex -> rot13`; solver จะตัดงาน classic/annealing ที่ไม่เกี่ยวกับ JSON/KDF/RSA parameter dump เพื่อให้ deterministic inputs เร็วขึ้น
 
+**Web เพิ่มเติม**
+
+- **Recursive route discovery** — เดินลิงก์/ฟอร์ม/สคริปต์แบบ same-origin ตาม depth และ page budget, ดึง route จาก JS, source map, JSON และ OpenAPI/Swagger ก่อนส่งเข้า dirbust/injection phases
+- **Dynamic SPA discovery** — `python3 run.py --category web --target http://target --browser` ใช้ Playwright render แบบ headless read-only เพื่อเก็บ client-side routes และ API calls โดยไม่ submit form หรือกด action ใดๆ
+
 **Crypto เพิ่มเติม**
 
 - Finite-field math: CRT, Tonelli–Shanks, BSGS, Pohlig–Hellman และ DH private/shared-secret recovery พร้อม verification
@@ -46,6 +51,7 @@
 - ตรวจ magic/file-type mismatch, hash/entropy, PNG/JPEG/GIF/BMP/WebP/TIFF metadata, EXIF/XMP/comments/chunks, ASCII/UTF-16 strings, trailing/polyglot signatures และ raw embedded text
 - ถอด candidate ที่เป็น base/hex/Unicode/chain ต่อจากข้อความในภาพ พร้อมแยก `VERIFIED` / `CANDIDATE` / raw decode ตามหลักฐาน
 - ลอง LSB bit-plane จาก PNG/BMP และใช้ `exiftool`, `identify`, `strings`, `zbarimg`, `tesseract`, `steghide`, `zsteg`, `binwalk` เมื่อเครื่องมี โดยจะรายงานเครื่องมือที่ใช้และ output ดิบ
+- Pillow pixel forensics เพิ่ม RGB/RGBA channel permutation, ทุก bit-plane, bit offset และ inverted stream พร้อม method trace; ตรวจ ZIP/GZIP/TAR ที่ฝังในไฟล์แบบ in-memory ไม่ extract path จาก archive ลงเครื่อง
 - Web UI มีแท็บ **Image** สำหรับอัปโหลดและดูผลแบบละเอียด; ไฟล์อัปโหลดถูกตั้งชื่อชั่วคราวแบบสุ่ม ไม่ใช้ชื่อไฟล์จากผู้ใช้เป็น path ตรงๆ
 
 **Web เพิ่มใหม่**
@@ -59,6 +65,18 @@
 - **SSTI -> RCE ladder**: Jinja2/Twig/Mako/ERB payloads หลังยืนยัน `{{7*7}}`
 - **Cloud metadata SSRF**: AWS/GCP/Azure instance-metadata targets
 - LFI เพิ่ม **php://filter** wrapper (base64 source read) และ data://
+
+**อัปเดตโปรเจกต์และเครื่องมือ**
+
+```bash
+python3 update.py --check                 # ตรวจ git/dependency/tool
+python3 update.py --update --deps         # fast-forward + ติดตั้ง requirements
+python3 update.py --all --pro              # อัปเดต + optional Python deps + verify
+python3 update.py --install-tools          # ติดตั้ง exiftool/ImageMagick/zbar ฯลฯ เมื่อรันด้วย user ปกติ
+python3 update.py --browser                # ติดตั้ง Chromium สำหรับ --browser
+```
+
+`update.py` ใช้ `git merge --ff-only`, ปฏิเสธ worktree ที่มี local changes และไม่ลบหรือ stash งานผู้ใช้เอง
 
 **รอบล่าสุด: nested-chain decoder + multithreaded crypto pipeline**
 - Chain decode ถอดซ้อนได้ลึกขึ้น: เพิ่ม **XOR single-byte ใน chain** (hexxor / b64xor / xor1 layers) — `base64>hex>xor1>base64` แกะอัตโนมัติ
