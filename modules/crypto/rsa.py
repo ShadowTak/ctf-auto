@@ -349,6 +349,10 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None)
         m = small_e_attack(c, e, n)
         if m is not None:
             found.append(("small e", strip_zeros(long_to_bytes(m))))
+            # An exact integer root is a verified plaintext. Continuing into
+            # generic factoring here turns easy e=3 challenges into a
+            # minutes-long 1024-bit factor hunt for no additional value.
+            return found
     except Exception:
         pass
 
