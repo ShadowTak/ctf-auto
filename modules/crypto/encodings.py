@@ -582,8 +582,7 @@ def dec_base62_crib(s):
     the plaintext from a known flag prefix by re-encoding guesses. Returns
     plaintext or None."""
     prefixes = (b"flag{", b"FLAG{", b"Flag{", b"THCTT", b"thctt", b"tctt",
-                b"TCTT", b"NCSA", b"ncsa", b"picoCTF{", b"HTB{", b"redacted{",
-                b"redacted{", b"CTF{", b"ctf{")
+                b"TCTT", b"NCSA", b"ncsa", b"picoCTF{", b"HTB{", b"CTF{", b"ctf{")
     return _base62_case_crack(s, prefixes)
 
 
@@ -937,8 +936,8 @@ def dec_emoji_offset(s):
 
 
 _SUBST_CRIBS = ["THCTT2024", "THCTT24", "THCTT", "thctt", "tctt", "TCTT",
-                "flag{", "FLAG{", "flag", "FLAG", "picoCTF", "redactedCTF",
-                "redacted", "HTB{", "NCSA", "HELLO", "THE", "WELCOME",
+                "flag{", "FLAG{", "flag", "FLAG", "picoCTF",
+                "HTB{", "NCSA", "HELLO", "THE", "WELCOME",
                 "CONGRAT", "GOOD JOB", "THIS IS"]
 
 
@@ -1345,7 +1344,7 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
     `max_branches` paths per layer, pruning by English-ness + flag presence.
 
     Returns list of (path_label, text) for every layer of every kept branch,
-    e.g. ('base64>hex>rot13', 'redactedCTF{...}')."""
+    e.g. ('base64>hex>rot13', 'picoCTF{...}')."""
     # Multi-layer encoding chains in CTF are short blobs. Long inputs (source
     # code, logs, config files) explode the beam with dozens of plausible
     # substrings — no flag hides under 20 layers of a 5 KB file. Punctuation-

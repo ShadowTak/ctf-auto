@@ -309,7 +309,6 @@ def main_menu():
         "2": ("Crypto auto-decode", "decode ทุกวิธี + crack hash / RSA / XOR"),
         "3": ("Network recon", "nmap / banner / pcap / DNS"),
         "4": ("⚡ Auto Full", "network -> web chain อัตโนมัติทั้งสาย"),
-        "5": ("⚡ Auto Lab", "สแกนแลปใน stack อัตโนมัติ (web/crypto)"),
         "6": ("โหมดละเอียด (เลือกโมดูล)", "เลือกโมดูลย่อยทีละตัว"),
         "7": ("🖼️ Image forensics", "EXIF / strings / stego / QR / OCR / embedded files"),
         "9": ("About / วิธีใช้", "รายละเอียดการใช้งาน"),
@@ -446,11 +445,6 @@ def dispatch(args):
                 target = input_target("host/IP (จะ auto chain ไปหาเว็บ):")
                 if target:
                     flags = run_full(target)
-            elif choice == "5":
-                cat = ask("หมวดแลป [w]eb / [c]rypto / [a]ll (default all):") or "all"
-                cat = {"w": "web", "c": "crypto", "a": "all"}.get(cat.lower(), "all")
-                import autolab
-                autolab.auto_lab(category=None if cat == "all" else cat)
             elif choice == "6":
                 sub = ask("เลือกหมวดละเอียด [w]eb / [c]rypto / [n]etwork:")
                 if sub.lower() in ("w", "web"):
@@ -502,11 +496,6 @@ def main():
                         help="ใช้ Playwright render SPA และเก็บ API routes แบบ read-only")
     parser.add_argument("--callback-url", default=None,
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
-    parser.add_argument("--auto-lab", nargs="?", const="all", default=None,
-                        choices=["web", "crypto", "all"],
-                        help="สแกนแลปใน stack อัตโนมัติ (web / crypto / all)")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="จำกัดจำนวนแลปที่สแกน (ใช้กับ --auto-lab)")
     args = parser.parse_args()
 
     from core import httpx as _httpx
@@ -535,10 +524,6 @@ def main():
         # random local callback unless the competitor explicitly exposes one.
         os.environ["CTF_AUTO_JWK_URL"] = args.callback_url.strip()
 
-    if args.auto_lab:
-        import autolab
-        autolab.auto_lab(category=args.auto_lab, limit=args.limit)
-        return
     if (args.category or args.module) and not args.target:
         parser.error("ต้องระบุ --target ด้วยเมื่อใช้ --category/--module")
     dispatch(args)

@@ -402,7 +402,7 @@ _COMMON_KEYS = [
     "thai", "ncsa", "cyber", "talent", "ctf", "funny", "hello", "world",
     "orange", "apple", "banana", "monkey", "hacker", "pwned", "crypto",
     "cipher", "decode", "encrypt", "victory", "winner", "challenge",
-    "redacted", "redactedctf", "htb", "pico", "letmein", "welcome", "master",
+    "htb", "pico", "letmein", "welcome", "master",
 ]
 
 

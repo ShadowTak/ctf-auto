@@ -3,7 +3,7 @@ import re
 
 # fmt: off
 _KNOWN = (
-    r"flag|FLAG|Flag|ctf|CTF|picoCTF|PicoCTF|picoctf|redacted|redacted|redactedCTF|HTB|THM|n00bz|"
+    r"flag|FLAG|Flag|ctf|CTF|picoCTF|PicoCTF|picoctf|HTB|THM|n00bz|"
     r"DUCTF|ductf|corctf|idek|ractf|crew|TBTL|INTIGRITI|PWNME|BambooFox|TAMUctf|"
     r"gigem|X-MAS|CJ|Hope|CSAW|grey|winterhack|ASIS|UTCTF|sp00ky|N0PS|vsctf|sdctf|"
     r"tjctf|rtcp|FwordCTF|ENO|AraCTF|SIT|downunderctf|buckeyectf|amateursCTF|"
@@ -34,7 +34,7 @@ CANDIDATE_RE = re.compile(
 
 # Also flags without braces sometimes (e.g. "picoCTF-xxx" / "FLAG_xxx").
 _NAKED_RE = re.compile(
-    rf"(?<![A-Za-z0-9])(?:picoCTF|PicoCTF|redacted|redacted|HTB|THM|n00bz|DUCTF|FLAG|flag|CTF)[-_][A-Za-z0-9_\-]{{4,120}}"
+    rf"(?<![A-Za-z0-9])(?:picoCTF|PicoCTF|HTB|THM|n00bz|DUCTF|FLAG|flag|CTF)[-_][A-Za-z0-9_\-]{{4,120}}"
 )
 
 
@@ -127,9 +127,8 @@ _PREFIX_WRAP_RE = re.compile(
 
 def wrap_known_prefix(text):
     """Some challenges hide the flag *without* braces (decoded plaintext like
-    'redactedCTFnotwhatitseems' or 'SCRIPTCTFNOTWHATITSEEMS'). If a known flag
-    prefix is immediately followed by more identifier chars, report it wrapped:
-    redactedCTF{notwhatitseems}. Returns a list of wrapped flag strings.
+    'SCRIPTCTFNOTWHATITSEEMS'). If a known flag prefix is immediately followed
+    by more identifier chars, report it wrapped. Returns a list of wrapped flag strings.
 
     Also emits the lowercase-body variant (flag bodies are almost always
     lowercase — e.g. decoded 'SCRIPTCTFNOTWHATITSEEMS' must become

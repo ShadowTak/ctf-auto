@@ -81,8 +81,8 @@ def _unique_urls(base, values, limit=100):
 def run_web(target, interactive=False, use_browser=False, reset_session=True):
     """Public entry. target = URL. Returns list of flags found.
 
-    A scan owns its cookie/auth state by default. This prevents a batch such
-    as auto-lab from carrying a flag cookie or bearer token from target A into
+    A scan owns its cookie/auth state by default. This prevents a batch
+    from carrying a flag cookie or bearer token from target A into
     target B. Callers running an intentional authenticated multi-target flow
     can opt out with ``reset_session=False``.
     """
@@ -236,7 +236,7 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
             if hits:
                 for tgt, param, kind, ev in hits:
                     lines.append(f"  [!] {kind}: {tgt} param={param} — {ev}")
-                    # evidence like "SSRF อ่าน flag ได้ผ่าน url: ['redactedCTF{...}']"
+                    # evidence may contain a flag discovered through the URL
                     # carries the flag itself — don't drop it
                     known, cands = extract_flags(ev)
                     fl += known + cands

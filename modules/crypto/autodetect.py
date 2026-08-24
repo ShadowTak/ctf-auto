@@ -576,7 +576,7 @@ def _analyze_text_uncached(text, prefix_hint=None):
         for value in flaglib.extract_flags(entry[-1], include_candidates=False)[0]:
             known_nonchain.add(value)
     # collect flags from EVERY solver output, not just the top-ranked 25 —
-    # a cracked-hash flag like 'redactedCTF{chocolate}' scores poorly as text
+    # a cracked-hash flag like 'picoCTF{chocolate}' scores poorly as text
     # but is the answer, and must never be dropped by the ranking cutoff
     for entry in results:
         if isinstance(entry, (tuple, list)) and entry:
@@ -901,7 +901,7 @@ def explain_flag(flag, ranked, source_text=None):
 
 def _hash_crack(text):
     """Crack any hex hash found in the text. If the file carries a flag
-    template like 'redactedCTF{<password>}', substitute the cracked value."""
+    template like 'picoCTF{<password>}', substitute the cracked value."""
     from . import kdf
     words = _wordlist_candidates()
     for token in re.findall(r"(?:pbkdf2_sha256\$[^\s]+|pbkdf2-sha(?:256|512)\$[^\s]+)", text):
@@ -1240,10 +1240,7 @@ def _extract_strings(data, min_len=4):
 def run_crypto(target, interactive=False, prefix_hint=None, context_text=None):
     """Public entry for the crypto category.
 
-    ``prefix_hint`` is optional challenge metadata such as ``redactedCTF{...}``.
-    ``context_text`` carries non-secret title/description/hints from a lab
-    bundle; it is used for explicit key dispatch but is not allowed to replace
-    the original artifact (so JSON/binary schema detection remains intact).
+    ``prefix_hint`` is optional challenge metadata such as ``picoCTF{...}``.
     """
     section("🔐 CRYPTO AUTO-DETECT")
     info_line(f"target: {target}")

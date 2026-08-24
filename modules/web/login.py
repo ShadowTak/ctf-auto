@@ -23,7 +23,7 @@ COMMON_PASSWORDS = ["admin", "password", "123456", "12345678", "1234", "12345",
                     "1234567", "123456789", "password1", "qwerty", "letmein",
                     "admin123", "root", "toor", "test", "guest", "welcome",
                     "welcome1", "changeme", "secret", "NCSA", "ncsa", "7331",
-                    "ctf", "flag", "redacted", "thailand", "thai1234"]
+                    "ctf", "flag", "thailand", "thai1234"]
 
 # 4-digit pins that show up in CTF challenges disproportionately often
 COMMON_PINS = ["0000", "1111", "1234", "1337", "4321", "1122", "2222", "3333",

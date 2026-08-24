@@ -182,7 +182,7 @@ def _recover_vigenere_key(text):
     (the flag prefix), score each full decryption by English-ness and return
     the best (score, keylen, key, dec). The classic IC-picker is too noisy
     on short texts (35-60 chars); the crib phase nails short flag messages
-    (e.g. ciphertext starting 'OvgvyGHW{' + crib 'redactedCTF' -> key ORANGE).
+    (e.g. ciphertext starting with a known competition prefix can provide a crib).
     Decryptions are considered under BOTH key-indexing schemes (per-letter
     and per-character) because naive implementations shift on every char."""
     letters = _norm(text)

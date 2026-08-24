@@ -538,8 +538,8 @@ def _playfair_results(text, prefix_hint=None):
     # A common static-challenge convention is a marker sentence whose tail
     # is the flag body (the prefix is omitted from the ciphertext).  Preserve
     # the readable plaintext and only wrap it when the artifact explicitly
-    # tells us the competition prefix.  Never guess redactedCTF (or any other
-    # event) for an unknown lab.
+    # tells us the competition prefix. Never guess an event prefix for an
+    # unknown challenge.
     marker = re.search(r"(?:THE)?SECRETFLAGIS([A-Z0-9_]{6,})", decoded)
     if marker:
         body = marker.group(1)

@@ -15,7 +15,7 @@ COMMON_SECRETS = [
     "your-256-bit-secret", "your-256-bit-secret-key", "qwerty", "123456",
     "letmein", "secret_key", "secretkey", "s3cr3t", "JWT_SECRET", "SECRET",
     "strongsecret", "notasecret", "thisisasecret", "hackthebox", "htb",
-    "flag", "redacted", "ctf", "topsecret",
+    "flag", "ctf", "topsecret",
 ]
 
 ALGOS = {

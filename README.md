@@ -1,20 +1,12 @@
 # 🚩 CTF Auto Recon & Solver
 
 เครื่องมืออัตโนมัติสำหรับ CTF — สแกน เจาะ และหา **flag** ครอบคลุม 3 หมวดหลัก
-+ **โหมด Auto Lab** สำหรับสแกนแลปใน redacted stack อัตโนมัติ
 
 | หมวด | ความสามารถ |
 |------|-----------|
 | 🌐 **Web** | recon (headers/robots/tech), **keep-alive HTTP pool + retry** (dirbust เร็วหลายเท่า, ทน connection reset), directory brute-force (threaded, 545+ paths + API/actuator), SQLi / XSS / LFI / SSTI / Command Injection / open-redirect / SSRF fuzz (**fuzz ทุก endpoint + ลิงก์ที่มี query param**), **form POST fuzz** (SQLi auth-bypass / CMDi / SSTI / XSS ในทุก field), **blind boolean-based SQLi extraction** (extract flag ทีละตัวอักษรผ่าน oracle), **login brute-force** (THCTT WebAccessControl: common creds + 4-digit PIN 0000-9999, form + JSON endpoint, detect success จาก baseline), **asset & JS crawl**, **error-trigger 500 leak hunt**, **AES-CTR bit-flip attack**, **GraphQL introspection**, **JSON mass-assignment / NoSQLi probe** (`$ne`/`$gt` + token follow-up), **cookie forge**, **IDOR enumeration**, JWT attack, backup file & source disclosure (.git/.env/.bak), **shared soft-404 calibration**, flag scan |
 | 🔐 **Crypto** | auto-detect & decode ทุกวิธี (base16/32/45/58/62/64/85, hex, binary, octal, morse, brainfuck, Ook!, **Malbolge**, ROT13/47, leet, gzip/zlib, file-magic sniff) + **beam-search chain-decode หลายชั้น** (แตกทุกเส้นทาง เก็บทุก flag — ผ่าน TCTT base85→base45 chain) + **recursive JSON/config payload decode** (ไล่ `token/cipher/data/blob` ที่ซ้อนอยู่เข้า pipeline เต็มชุด พร้อม trace path) + **custom-alphabet base-N** (Thai alphabet `ก-ฮ+๐-๙+0-9` แบบ THCTT New Base64, emoji base-100) + **emoji solver** (2-state → binary, unicode-offset 0x1F3F7, substitution word-matching) + **base62 case-recovery** (THCTT Bad62: enumerate case variants ต่อ chunk + flag-body scoring) + payload extraction หลัง label (`cipher:`/`cipher_hex:`) + classic ciphers (Caesar, **Vigenere auto-key: sweep + flag-prefix crib + per-char indexing**, Affine, Atbash, Railfence, **Bacon 0/1**, Playfair, Hill, Columnar, substitution solver ด้วย quadgram annealing) + RSA attacks (**auto-detect ไฟล์ n/e/c**, small-e, Wiener, Fermat, PEM/DER parser, **integer-only iroot**) + XOR (single/multi-byte, flag-prefix crib, **wordlist-key crib** แบบ THCTT) + **hash identify/crack + flag-template** (อ่าน prefix จากโจทย์ เช่น `picoCTF{<password>}` ได้) + **SHA-256 length extension attack** — เก็บ flag จาก **ทุก** ผล decode (ไม่ตัดด้วย ranking) |
 | 🌍 **Network** | nmap port scan (socket fallback), banner grabbing, **pure-Python pcap/pcapng analyzer** (TCP reassembly, HTTP extraction, flag hunt ใน UDP/ICMP exfil), DNS recon (records / zone transfer / subdomain brute) |
-
-### อัปเกรดล่าสุดสำหรับแลป
-
-- Web เพิ่ม JWT `alg=none`/public-key confusion/embedded-JWK probes, GraphQL alias batching, numeric REST IDOR, internal SSRF/header-routing probes, archive upload traversal และ race-flow probe
-- Web เพิ่ม XXE external-entity probe, JSON prototype-pollution follow-up และ CORS sensitive-endpoint check
-- Crypto เพิ่ม structured JSON dispatcher สำหรับ RSA broadcast/common-modulus/CRT fault, ECDSA nonce reuse, DH/Pohlig–Hellman, LCG stream, stream/CTR/GCM nonce-reuse recovery, matrix autokey และ Playfair artifacts
-- `lab_session.py` เลือกพอร์ต local จาก Colima เมื่อ API ส่ง vanity URL ที่เครื่องนี้เข้าถึงไม่ได้
 
 ### 🆕 รอบอัปเกรดล่าสุด (แข่งจริง edition)
 
@@ -28,7 +20,7 @@
 - Classic เพิ่ม **Beaufort / Variant Beaufort / Gronsfeld** (hill-climb + simulated annealing + beam), **keyboard-shift**, **T9 multi-tap**, **Polybius**
 - Structured JSON dispatcher เพิ่ม ECC fields (`p,a,b,gx,gy,qx,qy`) และ `{algorithm:"xtea",key,ciphertext}`
 - **ไม่ force flag prefix ใดๆ** — decode ได้อะไรโชว์อย่างนั้น prefix ใช้เฉพาะเมื่อ artifact ระบุ format มาเอง
-- **Context-aware artifact solving** — auto-lab ส่ง title/description/hints ให้ solver โดยไม่อ่าน writeup; key hints เช่น `The key is ORANGE` จะถูกใช้กับ Vigenere ทั้งแบบนับเฉพาะตัวอักษรและแบบนับทุก byte
+- **Context-aware artifact solving** — รับ title/description/hints จากโจทย์โดยไม่อ่าน writeup; key hints เช่น `The key is ORANGE` จะถูกใช้กับ Vigenere ทั้งแบบนับเฉพาะตัวอักษรและแบบนับทุก byte
 - **Chain graph search** — transform (ROT13/ROT47/leet ฯลฯ) ถูกสำรวจร่วมกับ Base/hex/compression ทุกชั้น ไม่ตัด branch เพียงเพราะ structural decoder ตัวแรกดูเหมือนใช้ได้
 - **PRNG dispatch** — เชื่อม xorshift128+ ที่มีอยู่แล้วเข้ากับ autodetect เมื่อ artifact ระบุ generator ชัดเจน
 - **GCM nonce-reuse hard mode** — รองรับ one-block flag ที่สั้นกว่า 16 ไบต์/ความยาวต่างกัน, แก้สมการ GF(2^128) และใช้ record เพิ่มเพื่อเลือก H ที่ forge ได้จริง
@@ -202,11 +194,6 @@ python3 run.py --category network --target 10.10.10.5
 python3 run.py --category network --target capture.pcap      # ไฟล์ pcap
 python3 run.py --category full --target 10.10.10.5           # auto chain
 
-# สแกนแลปใน redacted stack (ต้องรัน docker compose อยู่แล้ว)
-python3 run.py --auto-lab web          # ทุกแลป web
-python3 run.py --auto-lab crypto       # หมวด crypto (static files + web lab)
-python3 run.py --auto-lab all --limit 3   # จำกัดจำนวนแลป
-
 # เปิดตรวจ optional capabilities (Z3, SymPy, browser tooling ฯลฯ)
 python3 run.py --pro --category crypto --target "encoded_string"
 ```
@@ -243,9 +230,7 @@ python3 web_app.py --port 9000  # custom port
 
 ```
 ctf-auto/
-├── run.py                 # entry + เมนู + --auto-lab
-├── autolab.py             # โหมด auto-lab (drive redacted API)
-├── lab_session.py         # helper: login/start lab/download files
+├── run.py                 # entry + เมนู
 ├── core/                  # flag detect, threading, output, HTTP client, 404 calibration
 ├── modules/
 │   ├── crypto/            # encodings, classic, rsa, xor, hashes, modern, autodetect, length_ext
@@ -257,10 +242,9 @@ ctf-auto/
 └── reports/               # ผลลัพธ์ (auto-create)
 ```
 
-## ทดสอบ (ไม่ต้องมีเป้าหมายจริง)
+## ตรวจสอบ syntax (ไม่ต้องมีเป้าหมายจริง)
 
 ```bash
-python3 -m unittest -v test_regression.py  # nested chain, hinted Vigenere, ECB oracle/cut-and-paste
 python3 -m compileall -q core modules    # syntax check ทุก solver
 ```
 
@@ -299,7 +283,7 @@ tool จะ **extract payload หลัง label** อัตโนมัติ �
 - **RSA**: ให้ไฟล์ `n/e/c` มา → auto-detect → small-e / Wiener / Fermat
 - **XOR**: single / repeating-key (Kasiski + annealing) / flag-prefix crib
 - **Classic**: Caesar, Vigenere (auto-key ด้วย sweep + crib), Affine, Atbash, Bacon (0/1), Playfair, Hill, Columnar, substitution solver
-- **Hash**: identify + wordlist crack → ต่อ flag-template เอง (`redactedCTF{<password>}`)
+- **Hash**: identify + wordlist crack → ต่อ flag-template เมื่อโจทย์ระบุรูปแบบมาเอง
 - **SHA-256 length extension**: forge MAC จาก (msg, mac) คู่เดียว
 - **AES/ChaCha20/RC4/MT19937**: มี solver + test vector ในตัว
 
@@ -341,8 +325,8 @@ python3 run.py --category full --target 10.10.10.5      # auto: scan → เจ�
 ### 6) อ่านผล
 
 - flag ทุกตัวที่เจอขึ้นที่หน้าจอ + บันทึกใน `reports/<timestamp>/`
-- รู้จัก prefix ของหลายเวที (picoCTF, HTB, THCTT, NCSA, redacted และอื่นๆ) + generic candidate เช่น `customEvent{...}`
-- ถ้าโจทย์ระบุ `prefix=` หรือ `flag_format=` จะใช้ prefix นั้นกับ solver ที่ต้องสร้าง flag; ถ้าไม่ระบุจะคืน plaintext/candidate โดยไม่เดาเป็น `redactedCTF{...}`
+- รู้จัก prefix ของหลายเวที (picoCTF, HTB, THCTT, NCSA และอื่นๆ) + generic candidate เช่น `customEvent{...}`
+- ถ้าโจทย์ระบุ `prefix=` หรือ `flag_format=` จะใช้ prefix นั้นกับ solver ที่ต้องสร้าง flag; ถ้าไม่ระบุจะคืน plaintext/candidate โดยไม่เดา prefix ของเวทีใด
 - ผล decode ที่เป็นข้อความเพี้ยนยังแสดงตาม raw output เพื่อให้ตรวจสอบเองได้; ระบบไม่ห่อข้อความนั้นเป็น flag อัตโนมัติ
 
 ## อ้างอิง / แรงบันดาลใจ
