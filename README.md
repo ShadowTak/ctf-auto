@@ -9,8 +9,6 @@
 | 🌍 **Network** | nmap port scan (socket fallback), Nmap XML/NSE inventory, banner grabbing, **pure-Python pcap/pcapng analyzer** (TCP reassembly, HTTP extraction, flag hunt ใน UDP/ICMP exfil), DNS recon (records / zone transfer / subdomain brute) |
 | 🔌 **Service** | bounded TCP transcript runner for line-oriented CTF services พร้อม flag extraction และ timeout |
 
-### 🆕 รอบอัปเกรดล่าสุด (แข่งจริง edition)
-
 **Crypto เพิ่มใหม่**
 - **Factoring ladder**: trial division → Pollard p-1 → Pollard rho → FactorDB lookup (auto) — เสียบเข้า `crack_rsa` อัตโนมัติ
 - **ECDLP solver**: point arithmetic เต็มรูปแบบ + **Smart's attack** (anomalous curve, p-adic lift บน Jacobian Z/p^2) + **singular curve DLP** (node/cusp) + BSGS fallback — เทส exhaustive 57k+ เคสผ่านหมด
@@ -340,13 +338,6 @@ python3 run.py --category full --target 10.10.10.5      # auto: scan → เจ�
 - รู้จัก prefix ของหลายเวที (picoCTF, HTB, THCTT, NCSA และอื่นๆ) + generic candidate เช่น `customEvent{...}`
 - ถ้าโจทย์ระบุ `prefix=` หรือ `flag_format=` จะใช้ prefix นั้นกับ solver ที่ต้องสร้าง flag; ถ้าไม่ระบุจะคืน plaintext/candidate โดยไม่เดา prefix ของเวทีใด
 - ผล decode ที่เป็นข้อความเพี้ยนยังแสดงตาม raw output เพื่อให้ตรวจสอบเองได้; ระบบไม่ห่อข้อความนั้นเป็น flag อัตโนมัติ
-
-## อ้างอิง / แรงบันดาลใจ
-
-- **ctf-party** (Orange-Cyberdefense) — รายการ cipher/decoder
-- **CTF-CryptoTool** (karma9874) — แนวคิด bruteforce ทุก decoder
-- **awesome-ctf / CTF-tool** — รายการเครื่องมือแต่ละหมวด
-- `english_quadgrams.txt` จาก practicalcryptography.com (mirror: gibsjose/statistical-attack)
 
 ## หมายเหตุ
 
