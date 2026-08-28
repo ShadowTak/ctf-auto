@@ -168,8 +168,17 @@ input::placeholder,textarea::placeholder{color:var(--text3)}
 .badge-error{background:var(--red-bg);color:var(--red)}
 .r-item .value{
   font-family:var(--font);font-size:.85rem;color:var(--text);
-  word-break:break-all;line-height:1.6;
+  word-break:break-word;line-height:1.6;
 }
+.evidence-card{margin-top:10px;padding:12px;border:1px solid var(--line-2);background:rgba(7,16,15,.72);border-radius:var(--radius)}
+.evidence-card .evidence-title{display:flex;justify-content:space-between;gap:10px;align-items:center;color:var(--phosphor);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
+.evidence-card .evidence-path{margin-top:7px;color:var(--cyan);font-size:.78rem;word-break:break-all}
+.evidence-card .evidence-meta{margin-top:7px;color:var(--muted);font-size:.7rem;line-height:1.6}
+.evidence-card .evidence-steps{margin-top:8px;display:grid;gap:6px}
+.evidence-step{display:grid;grid-template-columns:24px 1fr;gap:8px;padding:7px 8px;background:var(--ink-0);border-left:2px solid var(--line-2);font-size:.72rem}
+.evidence-step .step-no{color:var(--phosphor);font-weight:700}.evidence-step .step-op{color:var(--cyan)}
+.evidence-step code{display:block;margin-top:3px;color:var(--paper);white-space:pre-wrap;word-break:break-all}
+.status-verified{color:var(--phosphor)}.status-candidate{color:var(--amber)}.status-raw{color:var(--muted)}
 .r-item .value .score{
   display:inline-block;background:var(--bg4);padding:2px 8px;
   border-radius:4px;font-size:.75rem;color:var(--text2);margin-right:8px;
@@ -302,6 +311,7 @@ input::placeholder,textarea::placeholder{color:var(--dim)}
 .summary{border-color:var(--line-1);background:var(--ink-1);padding:12px 18px}.summary .stat{font-size:.72rem;color:var(--muted)}
 .summary .stat .num{border-radius:2px;background:var(--ink-3);color:var(--phosphor)}
 .console-note{color:var(--dim);font-size:.72rem;line-height:1.7;margin-top:14px}.console-note code{color:var(--cyan)}
+.scan-options{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;color:var(--muted);font-size:.72rem}.scan-options label{display:flex;gap:7px;align-items:center}.scan-options input{accent-color:var(--phosphor)}
 footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;margin-top:22px;border-top:1px solid var(--line-1);color:var(--dim);font:10px var(--font);letter-spacing:.1em;text-transform:uppercase}
 @media(max-width:640px){
   .container{padding:18px 14px 28px}header{padding:18px 0 22px}header:after{position:static;display:block;margin-top:12px}.header-meta{position:static;margin-bottom:12px}header h1{font-size:2rem}.tabs{grid-template-columns:repeat(2,1fr)}.tab{border-bottom:1px solid var(--line-1)}.tab:nth-child(2){border-right:0}.tab:nth-child(3),.tab:nth-child(4){border-bottom:0}.panel{padding:18px}.input-row{flex-direction:column}.results-actions{gap:6px}.results-actions .elapsed{display:none}footer{flex-direction:column;gap:8px}
@@ -344,13 +354,14 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
         <input type="url" id="web-url" placeholder="https://target.ctf.com or http://10.10.10.1:8080">
         <button class="btn btn-primary" onclick="runScan('web')">▶ Scan</button>
       </div>
-      <label style="display:block;margin-top:10px;color:var(--text3);font-size:.82rem">
-        <input type="checkbox" id="web-browser"> ใช้ browser render SPA / เก็บ API calls (read-only)
-      </label>
     </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:-8px">
       <span class="console-note">Auto-detects: recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, GraphQL, JWT, cookie forge, AES-CTR bit-flip, login brute, backup leak, flag scan</span>
     </p>
+    <div class="scan-options" aria-label="Web scan options">
+      <label><input type="checkbox" id="web-browser"> Browser/API discovery</label>
+      <label><input type="checkbox" id="web-deep" checked> Deep CTF probes</label>
+    </div>
   </div>
 
   <!-- ── Crypto Panel ──────────────────────────────────────── -->
@@ -518,6 +529,7 @@ function runScan(category) {
   if (category === 'web') {
     body.url = document.getElementById('web-url').value.trim();
     body.browser = document.getElementById('web-browser').checked;
+    body.deep = document.getElementById('web-deep').checked;
     if (!body.url) return alert('Enter a URL');
   } else if (category === 'crypto') {
     body.text = document.getElementById('crypto-text').value.trim();
@@ -627,6 +639,14 @@ function setJobStatus(text, state) {
   el.className = 'job-status' + (state ? ' ' + state : '');
 }
 
+function renderEvidence(r) {
+  const solution = r.solution || r.explanation;
+  if (!solution && !r.path && !r.source) return '';
+  const steps = (solution && solution.steps) || [];
+  const stepHtml = steps.map(step => `<div class="evidence-step"><span class="step-no">${escHtml(step.index || '')}</span><div><span class="step-op">${escHtml(step.operation || 'solver')}</span><code>IN: ${escHtml(step.input || '')}</code><code>OUT: ${escHtml(step.output || '')}</code></div></div>`).join('');
+  return `<div class="evidence-card"><div class="evidence-title"><span>Evidence trail</span><span class="status-${escHtml(r.status || 'raw')}">${escHtml((r.status || 'raw').toUpperCase())}</span></div>${r.source ? `<div class="evidence-path">source: ${escHtml(r.source)}</div>` : ''}${r.path ? `<div class="evidence-path">path: ${escHtml(r.path)}</div>` : ''}${r.evidence && r.evidence.length ? `<div class="evidence-meta">${escHtml(r.evidence.join(' · '))}</div>` : ''}${stepHtml ? `<div class="evidence-steps">${stepHtml}</div>` : ''}</div>`;
+}
+
 function renderSolution(solution, expanded) {
   if (!solution) return '';
   const steps = solution.steps || [];
@@ -681,20 +701,20 @@ function renderResults(data, live = false) {
         <div class="label"><span class="badge badge-flag">🏁 ${escHtml((r.status || 'verified').toUpperCase())} FLAG</span></div>
         <div class="value">${escHtml(r.flag)}
           <small class="method">${escHtml(r.source || '')}${r.evidence && r.evidence.length ? ' · ' + escHtml(r.evidence.join(' → ')) : ''}</small>
-          ${renderSolution(r.solution, true)}
+          ${renderEvidence(r)}${renderSolution(r.solution, true)}
         </div>
       </div>`;
     } else if (r.type === 'candidate') {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-decode">CANDIDATE</span></div>
-        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${r.evidence && r.evidence.length ? `<small class="method"> · ${escHtml(r.evidence.join(' → '))}</small>` : ''}${renderSolution(r.solution, true)}</div>
+        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${renderEvidence(r)}${renderSolution(r.solution, true)}</div>
       </div>`;
     } else if (r.type === 'decode') {
       html += `<div class="r-item">
         <div class="label"><span class="badge badge-decode">DECODE</span></div>
         <div class="value"><span class="score">${r.score}</span><span class="method">${escHtml(r.method)}</span>
           <pre class="decode-output">${escHtml(r.output || '')}</pre>
-          ${renderSolution(r.explanation, false)}
+          ${renderEvidence({ ...r, solution: r.explanation, status: 'raw' })}${renderSolution(r.explanation, false)}
         </div>
       </div>`;
     } else if (r.type === 'scan') {
