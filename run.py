@@ -500,6 +500,8 @@ def main():
                         help="งบเวลาสแกนโดยรวมแบบ best-effort")
     parser.add_argument("--max-requests", type=int, default=0,
                         help="งบจำนวน request แบบ best-effort")
+    parser.add_argument("--nmap-xml", default=None,
+                        help="อ่านผล Nmap XML แบบ offline แล้วแสดง service/NSE inventory")
     parser.add_argument("--callback-url", default=None,
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     args = parser.parse_args()
@@ -536,6 +538,14 @@ def main():
         # HTTP session.  It is intentionally opt-in: a target cannot reach a
         # random local callback unless the competitor explicitly exposes one.
         os.environ["CTF_AUTO_JWK_URL"] = args.callback_url.strip()
+
+    if args.nmap_xml:
+        from modules.network.nmap import scan_xml
+        section("NMAP XML INVENTORY")
+        parsed = scan_xml(args.nmap_xml)
+        for line in __import__('modules.network.nmap', fromlist=['format_results']).format_results(parsed):
+            print(line)
+        return
 
     if (args.category or args.module) and not args.target:
         parser.error("ต้องระบุ --target ด้วยเมื่อใช้ --category/--module")

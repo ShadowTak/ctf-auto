@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from . import nmap_xml
 
 from core.output import info_line
 
@@ -85,6 +86,11 @@ def _socket_scan(host, ports, timeout=1.2, workers=256):
                 open_ports.append(p)
     return {p: {"service": SERVICE_GUESS.get(p, "unknown"), "info": ""}
             for p in sorted(open_ports)}
+
+
+def scan_xml(source):
+    """Parse an existing Nmap XML report without invoking external commands."""
+    return nmap_xml.flatten_services(source)
 
 
 def scan_host(host, ports=None, workers=256):

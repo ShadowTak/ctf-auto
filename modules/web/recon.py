@@ -6,6 +6,7 @@ import urllib.parse
 from core import httpx
 from core.flag import extract_flags
 from core.output import ok_line, warn_line
+from .response_diff import method_matrix
 
 SECURITY_HEADERS = [
     "strict-transport-security", "content-security-policy", "x-content-type-options",
@@ -110,18 +111,14 @@ def scan_security_txt(base):
 
 
 def http_methods(url):
-    methods = ["OPTIONS", "TRACE", "PUT", "DELETE", "PATCH"]
+    records = method_matrix(url)
     allowed = []
-    r = httpx.request("OPTIONS", url, timeout=6)
-    if r is not None:
-        allow = r.headers.get("allow", "")
-        if allow:
-            allowed = [m.strip() for m in allow.split(",")]
+    for record in records:
+        if record["method"] == "OPTIONS" and record.get("allow"):
+            allowed = [m.strip() for m in record["allow"].split(",")]
             print(f"  Allow: {', '.join(allowed)}")
-    for m in ("TRACE", "PUT", "DELETE"):
-        rr = httpx.request(m, url, timeout=6)
-        if rr is not None and rr.status not in (403, 405, 404, 501):
-            print(f"  [!] {m} -> {rr.status} (อาจใช้ได้)")
+        if record["method"] in {"TRACE", "PUT", "PATCH", "DELETE"} and record["status"] not in (403, 404, 405, 501):
+            print(f"  [!] {record['method']} -> {record['status']} (อาจใช้ได้)")
     return allowed
 
 
