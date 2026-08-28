@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .cancel import cancelled
 from .output import Progress
+from .budget import workers as adaptive_workers
 
 
 def pmap(func, items, workers=32, desc="", timeout=None):
@@ -13,10 +14,10 @@ def pmap(func, items, workers=32, desc="", timeout=None):
     items = list(items)
     if not items:
         return []
-    workers = max(1, min(workers, len(items)))
+    workers = max(1, min(adaptive_workers("io", workers), len(items)))
     progress = Progress(len(items), desc=desc)
     results = []
-    pool = ThreadPoolExecutor(max_workers=workers)
+    pool = ThreadPoolExecutor(max_workers=adaptive_workers("io", workers))
     try:
         futures = {}
         for it in items:
@@ -46,7 +47,7 @@ def run_concurrent(funcs, workers=16, desc=""):
         return []
     progress = Progress(len(funcs), desc=desc)
     results = [None] * len(funcs)
-    pool = ThreadPoolExecutor(max_workers=workers)
+    pool = ThreadPoolExecutor(max_workers=adaptive_workers("io", workers))
     try:
         futures = {}
         for i, fn in enumerate(funcs):

@@ -196,6 +196,10 @@ python3 run.py --category full --target 10.10.10.5           # auto chain
 
 # เปิดตรวจ optional capabilities (Z3, SymPy, browser tooling ฯลฯ)
 python3 run.py --pro --category crypto --target "encoded_string"
+
+# competition tuning: adaptive by default; override only when needed
+python3 run.py --category crypto --target cipher.txt --workers 8
+python3 run.py --category web --target http://target:8080 --max-seconds 180 --max-requests 4000
 ```
 
 ไม่ต้องติดตั้ง dependency ใดๆ (stdlib ล้วน) — ถ้ามี `nmap`, `pycryptodome` จะทำงานได้ลึกขึ้น
@@ -208,6 +212,10 @@ python3 -m playwright install chromium
 ```
 
 `--pro` จะตรวจ capability ก่อนรันและแจ้งรายการที่ไม่มี โดยไม่ทำให้โหมด stdlib ล้มเหลว
+
+ค่า worker ของ pipeline เป็น adaptive ตาม CPU และสามารถ override ด้วย `--workers`
+หรือ `CTF_AUTO_WORKERS` ได้ ส่วน `--max-seconds`/`--max-requests` เป็นงบแบบ
+best-effort สำหรับหยุดงานใหม่ก่อนเครื่องหรือเป้าหมายจะถูกใช้งานหนักเกินไป
 
 ### 🌐 Web UI (Beautiful dark-themed interface)
 

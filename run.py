@@ -494,9 +494,22 @@ def main():
                         help="เปิด optional solver/browser capabilitiesถ้ามีติดตั้ง")
     parser.add_argument("--browser", action="store_true",
                         help="ใช้ Playwright render SPA และเก็บ API routes แบบ read-only")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="จำกัดจำนวน worker (ค่าเริ่มต้น adaptive)")
+    parser.add_argument("--max-seconds", type=int, default=0,
+                        help="งบเวลาสแกนโดยรวมแบบ best-effort")
+    parser.add_argument("--max-requests", type=int, default=0,
+                        help="งบจำนวน request แบบ best-effort")
     parser.add_argument("--callback-url", default=None,
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     args = parser.parse_args()
+
+    if args.workers:
+        os.environ["CTF_AUTO_WORKERS"] = str(max(1, args.workers))
+    if args.max_seconds:
+        os.environ["CTF_AUTO_MAX_SECONDS"] = str(max(1, args.max_seconds))
+    if args.max_requests:
+        os.environ["CTF_AUTO_MAX_REQUESTS"] = str(max(1, args.max_requests))
 
     from core import httpx as _httpx
     headers = {}

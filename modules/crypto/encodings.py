@@ -10,6 +10,8 @@ import re
 import struct
 import urllib.parse
 import zlib
+import bz2
+import lzma
 from functools import lru_cache
 
 from .common import is_printable_text
@@ -440,6 +442,25 @@ def dec_leet(s):
         else:
             out.append(ch)
     return "".join(out)
+
+
+def dec_compressed(s):
+    """Decode common raw/archive compression layers without touching disk."""
+    raw = s.encode("latin-1") if isinstance(s, str) else bytes(s)
+    decoders = ((b"\x1f\x8b", gzip.decompress),
+                (b"BZh", bz2.decompress),
+                (b"\xfd7zXZ\x00", lzma.decompress),
+                (b"\x78\x01", zlib.decompress),
+                (b"\x78\x5e", zlib.decompress),
+                (b"\x78\x9c", zlib.decompress),
+                (b"\x78\xda", zlib.decompress))
+    for magic, fn in decoders:
+        if raw.startswith(magic):
+            try:
+                return fn(raw).decode("latin-1")
+            except Exception:
+                pass
+    return None
 
 
 def dec_gzip(s):
@@ -1264,6 +1285,7 @@ _ALL_LAYER_DECODERS = [
     ("unicode", dec_unicode),
     ("custom-base", dec_custom_base),
     ("emoji", dec_emoji),
+    ("compressed", dec_compressed),
     ("gzip", lambda s: dec_gzip(s.encode("latin-1"))),
     ("brainfuck", dec_brainfuck),
     ("ook", dec_ook),
@@ -1335,7 +1357,8 @@ def _chain_score(text):
     return eng - len(text) * 0.05
 
 
-def chain_decode_best(text, max_depth=12, max_branches=6):
+def chain_decode_best(text, max_depth=12, max_branches=6,
+                      max_nodes=600, timeout=12.0):
     """Beam-search chain decode: at EVERY layer try ALL decoders and branch.
 
     A single string can be valid under several decoders at once (e.g. looks
@@ -1408,7 +1431,7 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
         return produced, bool(applied_structural or produced)
 
     import time as _time
-    deadline = _time.monotonic() + 12.0  # hard wall-clock guard per chain
+    deadline = _time.monotonic() + max(0.1, float(timeout))
     for _depth in range(max_depth):
         if not frontier or _time.monotonic() > deadline:
             break
@@ -1421,11 +1444,13 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
                 continue
             produced_list, _applied = produced
             for nxt, new_path in produced_list:
-                if nxt in seen_nodes or len(seen_nodes) > 600:
+                if nxt in seen_nodes or len(seen_nodes) >= max_nodes:
                     continue
                 seen_nodes.add(nxt)
                 next_frontier.append((nxt, new_path))
                 results.append((new_path, nxt))
+                if _chain_flaggy(nxt):
+                    results.append((new_path, nxt))
         if not next_frontier:
             break
 
@@ -1442,6 +1467,9 @@ def chain_decode_best(text, max_depth=12, max_branches=6):
                 pass
             return bonus + _chain_score(txt)
         next_frontier.sort(key=sortkey)
+        # A flag-shaped node is a verified search target for the chain. Keep
+        # it in the result, but stop expanding once this depth is complete;
+        # continuing transform branches only creates equivalent false positives.
         frontier = next_frontier[:max_branches]
     return results
 
@@ -1467,6 +1495,7 @@ def _try_all_encodings_uncached(text):
         ("emoji-offset", dec_emoji_offset), ("emoji-subst", dec_emoji_subst),
         ("malbolge", dec_malbolge), ("custom-base", dec_custom_base),
         ("uuencode", dec_uuencode), ("quoted-printable", dec_quoted_printable),
+        ("compressed", dec_compressed),
         ("base32hex", dec_base32hex), ("a1z26", dec_a1z26),
         ("nato", dec_nato), ("tapcode", dec_tapcode),
         ("jwt-payload", dec_jwt_payload),
