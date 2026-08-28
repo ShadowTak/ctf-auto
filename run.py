@@ -58,6 +58,17 @@ def run_web(target, **kwargs):
 
 def run_crypto(target):
     from modules.crypto.autodetect import run_crypto as _run
+    if os.path.isdir(target):
+        from modules.crypto.correlation import correlate
+        section("🧩 CROSS-FILE CRYPTO CORRELATION")
+        report = correlate(target)
+        print("files:", len(report["files"]))
+        for hint in report["hints"]:
+            info_line("hint: " + hint)
+        for item in report["repeated"][:100]:
+            print(f"  [{item['kind']}] {item['value'][:80]} <- {', '.join(item['sources'])}")
+        return []
+    from modules.crypto.autodetect import run_crypto as _run
     return _run(target)
 
 
@@ -555,6 +566,10 @@ def main():
         # HTTP session.  It is intentionally opt-in: a target cannot reach a
         # random local callback unless the competitor explicitly exposes one.
         os.environ["CTF_AUTO_JWK_URL"] = args.callback_url.strip()
+
+    if args.pro:
+        from modules.crypto.hardmode import choose_backends
+        info_line("crypto backends: " + ", ".join(choose_backends()))
 
     if args.plan:
         from core.planner import capabilities, plan
