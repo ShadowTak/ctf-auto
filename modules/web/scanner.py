@@ -24,6 +24,7 @@ from . import injections as inj_mod
 from . import jwt as jwt_mod
 from . import login as login_mod
 from . import recon as recon_mod
+from . import parameter_inventory
 
 
 def _cookie_headers(response):
@@ -100,6 +101,9 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         return flags
     ok_line(f"เชื่อมต่อได้ (HTTP {probe.status})")
     flags.extend(_response_flags(probe))
+    passive_inventory = parameter_inventory.inventory(
+        probe.text, probe.headers.get("content-type", ""), base + "/")
+    info_line("input surfaces: " + str(parameter_inventory.summarize(passive_inventory)))
 
     # 1) recon
     extra_paths, recon_flags = recon_mod.run_recon(base)
