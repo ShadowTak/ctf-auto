@@ -364,6 +364,11 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
         <button class="btn btn-primary" onclick="runScan('web')">▶ Scan</button>
       </div>
     </div>
+    <div class="input-group" style="margin-top:14px">
+      <label>Optional Flag Prefix <span style="color:var(--text3)">(ctf = ctf{})</span></label>
+      <input type="text" id="web-prefix" placeholder="Optional: ctf, picoCTF, HTB, or ctf{}" autocomplete="off" spellcheck="false">
+      <div class="console-note">ใช้เป็น hint สำหรับจัดกลุ่มผลลัพธ์เท่านั้น ไม่กรอกก็สแกนตามปกติ</div>
+    </div>
     <p style="color:var(--text3);font-size:.82rem;margin-top:-8px">
       <span class="console-note">Auto-detects: recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, GraphQL, JWT, cookie forge, AES-CTR bit-flip, login brute, backup leak, flag scan</span>
     </p>
@@ -545,6 +550,7 @@ function runScan(category) {
   if (category === 'web') {
     body.url = document.getElementById('web-url').value.trim();
     body.browser = document.getElementById('web-browser').checked;
+    body.prefix = document.getElementById('web-prefix').value.trim();
     body.deep = document.getElementById('web-deep').checked;
     body.max_seconds = Number(document.getElementById('web-seconds').value || 0);
     body.max_requests = Number(document.getElementById('web-requests').value || 0);

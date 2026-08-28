@@ -249,7 +249,7 @@ def _run_image(jid, filepath):
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-def _run_web_once(jid, url, use_browser=False):
+def _run_web_once(jid, url, use_browser=False, prefix_hint=None):
     try:
         from core.evidence import findings_from_flags
         from modules.web.scanner import run_web
@@ -262,10 +262,16 @@ def _run_web_once(jid, url, use_browser=False):
                                 "data": str(v)[:1000] if not isinstance(v, list) else
                                 json.dumps(v[:50])[:1000]})
         elif isinstance(output, list):
+            from core.flag import normalize_prefix
+            normalized = normalize_prefix(prefix_hint)
+            evidence = ("flag-shaped value returned by scanner",)
+            if normalized:
+                evidence += (f"operator prefix hint: {normalized}",)
             for finding in findings_from_flags(
-                    output, source="web:scanner", verified=False,
-                    confidence=0.78,
-                    evidence=("flag-shaped value returned by scanner",)):
+                output, source="web:scanner", verified=False,
+                confidence=0.78,
+                evidence=evidence):
+
                 results.append({"type": "candidate",
                                 "value": finding.value,
                                 "confidence": finding.confidence,
@@ -279,7 +285,7 @@ def _run_web_once(jid, url, use_browser=False):
 
 
 def _run_web(jid, url, use_browser=False, deep=True,
-             max_seconds=0, max_requests=0):
+             max_seconds=0, max_requests=0, prefix_hint=None):
     """Run one web job with an isolated process-local HTTP session.
 
     The solver modules intentionally share cookies and learned auth headers
@@ -295,7 +301,8 @@ def _run_web(jid, url, use_browser=False, deep=True,
         budget.configure(requests=max_requests, seconds=max_seconds)
         set_event(_jobs[jid]["cancel"])
         try:
-            _run_web_once(jid, url, use_browser=use_browser)
+            _run_web_once(jid, url, use_browser=use_browser,
+                          prefix_hint=prefix_hint)
         finally:
             clear_event()
             budget.clear()
@@ -506,6 +513,13 @@ def api_scan():
 
     elif category == "web":
         url = data.get("url", "").strip()
+        prefix_hint = data.get("prefix", "").strip()
+        if prefix_hint:
+            from core.flag import normalize_prefix
+            prefix_hint = normalize_prefix(prefix_hint)
+            if not prefix_hint:
+                _finish_job(jid, [], error="Prefix must look like ctf, ctf{, or ctf{...}")
+                return jsonify({"job_id": jid})
         if not url:
             _finish_job(jid, [], error="No URL provided")
             return jsonify({"job_id": jid})
@@ -520,7 +534,8 @@ def api_scan():
                              kwargs={"use_browser": bool(data.get("browser")),
                                      "deep": bool(data.get("deep", True)),
                                      "max_seconds": max_seconds,
-                                     "max_requests": max_requests}, daemon=True)
+                                     "max_requests": max_requests,
+                                     "prefix_hint": prefix_hint or None}, daemon=True)
         t.start()
 
     elif category == "network":

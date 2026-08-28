@@ -51,7 +51,7 @@ def input_target(hint="URL (เช่น http://10.10.10.5:8080 / path ไฟล
 # ---------------------------------------------------------------------------
 # Category runners
 # ---------------------------------------------------------------------------
-def run_web(target, **kwargs):
+def run_web(target, prefix_hint=None, **kwargs):
     from modules.web.scanner import run_web as _run
     return _run(target, **kwargs)
 
