@@ -5,10 +5,10 @@ import re
 def plan(text):
     value = str(text or "")
     low = value.lower()
-    jobs = ["encoding-chain", "flag-scan"]
+    jobs = ["encoding-chain", "flag-scan", "artifact-recursion"]
     reasons = []
     if re.search(r"(?im)^\s*(?:n|e|c|p|q|d)\s*[=:]", value) or re.search(r"[\"'](?:n|e|c|p|q|d)[\"']\s*:", value):
-        jobs += ["rsa-attacks", "factorization"]
+        jobs += ["rsa-attacks", "factorization", "rsa-broadcast", "rsa-common-modulus"]
         reasons.append("RSA-like named integer parameters")
     if "recipient" in low or "broadcast" in low:
         jobs.append("rsa-broadcast")

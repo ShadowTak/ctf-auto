@@ -13,7 +13,7 @@ from . import classic
 from . import hashes as hashes_mod
 from . import xor as xor_mod
 from . import structured as structured_mod
-from .common import score_candidates, text_score
+from .common import score_candidates, text_score, long_to_bytes
 
 MAX_CANDIDATES = 25
 
@@ -473,8 +473,21 @@ def _analyze_text_uncached(text, prefix_hint=None):
     else:
         jobs_extra = []
 
+    def _extra_rsa_job():
+        """Dispatch extra RSA forms without affecting the legacy RSA solver."""
+        from . import extra
+        pairs = []
+        for match in re.finditer(r"(?is)n\s*[=:]\s*(\d+).*?e\s*[=:]\s*(\d+).*?c\s*[=:]\s*(\d+)", text):
+            pairs.append((int(match.group(1)), int(match.group(2)), int(match.group(3))))
+        if len(pairs) >= 2:
+            root = extra.rsa_broadcast(pairs)
+            if root is not None:
+                return [("rsa-broadcast-verified", long_to_bytes(root))]
+        return []
+
     jobs = [
         ("encodings", lambda: encodings.try_all_encodings(text)),
+        ("rsa-extra", _extra_rsa_job),
         ("explicit-key", lambda: _hinted_classic_results(text)),
         ("structured", lambda: structured_mod.analyze(text,
                                                        prefix_hint=prefix_hint)),
