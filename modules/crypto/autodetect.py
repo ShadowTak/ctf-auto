@@ -163,11 +163,9 @@ def _try_rsa_params(text):
 
 
 def _prefix_cribs(prefix_hint):
-    """Turn explicit challenge metadata into a precise XOR crib."""
-    if not prefix_hint:
-        return None
-    match = re.search(r"(?i)([A-Za-z0-9_-]{2,30})\s*\{", str(prefix_hint))
-    return [match.group(1) + "{"] if match else None
+    """Turn an optional ``ctf``/``ctf{}`` hint into a precise XOR crib."""
+    normalized = flaglib.normalize_prefix(prefix_hint)
+    return [normalized] if normalized else None
 
 
 _PAYLOAD_LABEL_RE = re.compile(
@@ -650,7 +648,7 @@ def analyze_text(text, prefix_hint=None):
     return list(ranked), list(flags)
 
 
-def analyze_text_evidence(text):
+def analyze_text_evidence(text, prefix_hint=None):
     """Analyze text and return rich findings without changing the legacy API.
 
     ``analyze_text`` remains the compatibility entry point returning
@@ -658,7 +656,7 @@ def analyze_text_evidence(text):
     extractions as verified, heuristic XOR cribs as candidates, and all other
     interesting plaintext as raw decode output.
     """
-    ranked, legacy_flags = analyze_text(text)
+    ranked, legacy_flags = analyze_text(text, prefix_hint=prefix_hint)
     ledger = EvidenceLedger()
     observed = set()
 

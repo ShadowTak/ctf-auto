@@ -84,6 +84,22 @@ def known_prefixes():
     return tuple(_KNOWN_PREFIXES)
 
 
+def normalize_prefix(prefix):
+    """Normalize UI/CLI prefix input to the canonical ``name{`` form.
+
+    Users may enter ``ctf``, ``ctf{`` or ``ctf{...}``; only the prefix name
+    is retained. Empty input means no prefix hint and never changes default
+    flag detection behavior.
+    """
+    value = str(prefix or "").strip().strip("`'\" ")
+    if "{" in value:
+        value = value.split("{", 1)[0]
+    value = value.rstrip("_") if value.endswith("_{") else value
+    if not re.fullmatch(r"[A-Za-z0-9_-]{2,30}", value):
+        return ""
+    return value + "{"
+
+
 def infer_prefixes(text):
     """Infer flag prefixes explicitly present in an artifact or plaintext.
 

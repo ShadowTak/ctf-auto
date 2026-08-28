@@ -123,14 +123,14 @@ def _finish_job(jid, results, error=None, cancelled=False):
 
 # ── Crypto ───────────────────────────────────────────────────────────────────
 
-def _run_crypto(jid, text=None, filepath=None):
+def _run_crypto(jid, text=None, filepath=None, prefix_hint=None):
     try:
         from modules.crypto.autodetect import (
             analyze_file, analyze_text, analyze_text_evidence,
             explain_decode, explain_flag)
         results = []
         if text:
-            text_ranked, findings = analyze_text_evidence(text)
+            text_ranked, findings = analyze_text_evidence(text, prefix_hint=prefix_hint)
             results.append({"type": "text-input", "input": text[:200]})
             for r in (text_ranked or []):
                 if isinstance(r, (list, tuple)):
@@ -173,7 +173,7 @@ def _run_crypto(jid, text=None, filepath=None):
                 sum(1 for char in file_source_text if char.isprintable()) /
                 max(len(file_source_text), 1) > 0.8)
             if is_text:
-                file_ranked, flags = analyze_text(file_source_text)
+                file_ranked, flags = analyze_text(file_source_text, prefix_hint=prefix_hint)
                 # analyze_text already runs the verified structured/RSA fast
                 # path. Avoid re-entering generic factorers when it solved the
                 # file; this keeps the UI responsive on hard RSA artifacts.
@@ -486,6 +486,13 @@ def api_scan():
 
     if category == "crypto":
         text = data.get("text", "").strip()
+        prefix_hint = data.get("prefix", "").strip()
+        if prefix_hint:
+            from core.flag import normalize_prefix
+            prefix_hint = normalize_prefix(prefix_hint)
+            if not prefix_hint:
+                _finish_job(jid, [], error="Prefix must look like ctf, ctf{, or ctf{...}")
+                return jsonify({"job_id": jid})
         filepath = None
         # If a file was uploaded previously, it's in /tmp
         file_path = data.get("file_path")
@@ -494,7 +501,7 @@ def api_scan():
         if not text and not filepath:
             _finish_job(jid, [], error="No text or file provided")
             return jsonify({"job_id": jid})
-        t = threading.Thread(target=_run_crypto, args=(jid,), kwargs={"text": text or None, "filepath": filepath}, daemon=True)
+        t = threading.Thread(target=_run_crypto, args=(jid,), kwargs={"text": text or None, "filepath": filepath, "prefix_hint": prefix_hint or None}, daemon=True)
         t.start()
 
     elif category == "web":

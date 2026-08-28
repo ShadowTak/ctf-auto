@@ -379,6 +379,11 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
   <div class="panel" id="panel-crypto">
     <div class="panel-title"><span class="dot dot-crypto"></span> Crypto Auto Decode</div>
     <div class="input-group">
+      <label>Optional Flag Prefix <span style="color:var(--text3)">(ctf = ctf{})</span></label>
+      <input type="text" id="crypto-prefix" placeholder="Optional: ctf, picoCTF, HTB, or ctf{}" autocomplete="off" spellcheck="false">
+      <div class="console-note">ใช้เป็น hint เท่านั้น: กรอก <code>ctf</code> จะตีความเป็น <code>ctf{...}</code> และเว้นว่างได้</div>
+    </div>
+    <div class="input-group">
       <label>Text / Ciphertext</label>
       <textarea id="crypto-text" placeholder="Paste ciphertext, hash, RSA params, encoded string...&#10;&#10;Examples:&#10;  n = 12345...&#10;  e = 65537&#10;  c = 99999...&#10;&#10;  VVZkV2JtRllUa1JX...&#10;&#10;  cipher_hex: 0327252b31...&#10;&#10;  10001000101000001..."></textarea>
     </div>
@@ -546,6 +551,7 @@ function runScan(category) {
     if (!body.url) return alert('Enter a URL');
   } else if (category === 'crypto') {
     body.text = document.getElementById('crypto-text').value.trim();
+    body.prefix = document.getElementById('crypto-prefix').value.trim();
     if (uploadedFiles.crypto) body.file_path = uploadedFiles.crypto;
     if (!body.text && !body.file_path) return alert('Enter text or upload a file');
   } else if (category === 'network') {
