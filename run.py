@@ -66,6 +66,16 @@ def run_network(target):
     return _run(target, chain_to_web=run_web)
 
 
+def run_service(target):
+    from modules.service.runner import run as _run
+    result = _run(target)
+    section("🔌 SERVICE TRANSCRIPT")
+    print(result["transcript"][:12000])
+    for value in result["flags"]:
+        flag_line(value)
+    return result["flags"]
+
+
 def run_image(target):
     from modules.image.forensics import run_image as _run
     return _run(target)
@@ -412,6 +422,8 @@ def dispatch(args):
         flags = run_network(args.target)
     elif args.category in ("image", "picture", "pic"):
         flags = run_image(args.target)
+    elif args.category == "service":
+        flags = run_service(args.target)
     elif args.category == "full":
         flags = run_full(args.target)
     elif args.module == "jwt":
@@ -474,7 +486,7 @@ def dispatch(args):
 
 def main():
     parser = argparse.ArgumentParser(description="CTF Auto Recon & Solver")
-    parser.add_argument("--category", choices=["web", "crypto", "network", "image", "picture", "pic", "full"],
+    parser.add_argument("--category", choices=["web", "crypto", "network", "image", "picture", "pic", "service", "full"],
                         help="หมวดที่ต้องการรัน")
     parser.add_argument("--module", help="โมดูลเดี่ยว (เช่น jwt)")
     parser.add_argument("--target", help="URL / host / path ไฟล์ / ข้อความ")
@@ -500,11 +512,16 @@ def main():
                         help="งบเวลาสแกนโดยรวมแบบ best-effort")
     parser.add_argument("--max-requests", type=int, default=0,
                         help="งบจำนวน request แบบ best-effort")
+    parser.add_argument("--plan", action="store_true",
+                        help="แสดง artifact/capability plan ก่อนรัน")
     parser.add_argument("--nmap-xml", default=None,
                         help="อ่านผล Nmap XML แบบ offline แล้วแสดง service/NSE inventory")
     parser.add_argument("--callback-url", default=None,
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     args = parser.parse_args()
+
+    if args.category == "service" and args.target and ":" not in args.target:
+        parser.error("service target ต้องเป็น host:port")
 
     if args.workers:
         os.environ["CTF_AUTO_WORKERS"] = str(max(1, args.workers))
@@ -538,6 +555,14 @@ def main():
         # HTTP session.  It is intentionally opt-in: a target cannot reach a
         # random local callback unless the competitor explicitly exposes one.
         os.environ["CTF_AUTO_JWK_URL"] = args.callback_url.strip()
+
+    if args.plan:
+        from core.planner import capabilities, plan
+        section("AUTO PLAN")
+        print(plan(args.target or ""))
+        print("capabilities:", capabilities())
+        if not (args.category or args.module or args.nmap_xml):
+            return
 
     if args.nmap_xml:
         from modules.network.nmap import scan_xml

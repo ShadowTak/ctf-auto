@@ -7,6 +7,7 @@
 | 🌐 **Web** | recon (headers/robots/tech), **keep-alive HTTP pool + retry** (dirbust เร็วหลายเท่า, ทน connection reset), directory brute-force (threaded, 545+ paths + API/actuator), SQLi / XSS / LFI / SSTI / Command Injection / open-redirect / SSRF fuzz (**fuzz ทุก endpoint + ลิงก์ที่มี query param**), **form POST fuzz** (SQLi auth-bypass / CMDi / SSTI / XSS ในทุก field), **blind boolean-based SQLi extraction** (extract flag ทีละตัวอักษรผ่าน oracle), **login brute-force** (THCTT WebAccessControl: common creds + 4-digit PIN 0000-9999, form + JSON endpoint, detect success จาก baseline), **asset & JS crawl**, **error-trigger 500 leak hunt**, **AES-CTR bit-flip attack**, **GraphQL introspection**, **JSON mass-assignment / NoSQLi probe** (`$ne`/`$gt` + token follow-up), **cookie forge**, **IDOR enumeration**, JWT attack, backup file & source disclosure (.git/.env/.bak), **shared soft-404 calibration**, flag scan |
 | 🔐 **Crypto** | auto-detect & decode ทุกวิธี (base16/32/45/58/62/64/85, hex, binary, octal, morse, brainfuck, Ook!, **Malbolge**, ROT13/47, leet, gzip/zlib, file-magic sniff) + **beam-search chain-decode หลายชั้น** (แตกทุกเส้นทาง เก็บทุก flag — ผ่าน TCTT base85→base45 chain) + **recursive JSON/config payload decode** (ไล่ `token/cipher/data/blob` ที่ซ้อนอยู่เข้า pipeline เต็มชุด พร้อม trace path) + **custom-alphabet base-N** (Thai alphabet `ก-ฮ+๐-๙+0-9` แบบ THCTT New Base64, emoji base-100) + **emoji solver** (2-state → binary, unicode-offset 0x1F3F7, substitution word-matching) + **base62 case-recovery** (THCTT Bad62: enumerate case variants ต่อ chunk + flag-body scoring) + payload extraction หลัง label (`cipher:`/`cipher_hex:`) + classic ciphers (Caesar, **Vigenere auto-key: sweep + flag-prefix crib + per-char indexing**, Affine, Atbash, Railfence, **Bacon 0/1**, Playfair, Hill, Columnar, substitution solver ด้วย quadgram annealing) + RSA attacks (**auto-detect ไฟล์ n/e/c**, small-e, Wiener, Fermat, PEM/DER parser, **integer-only iroot**) + XOR (single/multi-byte, flag-prefix crib, **wordlist-key crib** แบบ THCTT) + **hash identify/crack + flag-template** (อ่าน prefix จากโจทย์ เช่น `picoCTF{<password>}` ได้) + **SHA-256 length extension attack** — เก็บ flag จาก **ทุก** ผล decode (ไม่ตัดด้วย ranking) |
 | 🌍 **Network** | nmap port scan (socket fallback), Nmap XML/NSE inventory, banner grabbing, **pure-Python pcap/pcapng analyzer** (TCP reassembly, HTTP extraction, flag hunt ใน UDP/ICMP exfil), DNS recon (records / zone transfer / subdomain brute) |
+| 🔌 **Service** | bounded TCP transcript runner for line-oriented CTF services พร้อม flag extraction และ timeout |
 
 ### 🆕 รอบอัปเกรดล่าสุด (แข่งจริง edition)
 
@@ -201,6 +202,8 @@ python3 run.py --pro --category crypto --target "encoded_string"
 python3 run.py --category crypto --target cipher.txt --workers 8
 python3 run.py --category web --target http://target:8080 --max-seconds 180 --max-requests 4000
 python3 run.py --nmap-xml scan.xml              # inventory existing Nmap XML/NSE output
+python3 run.py --plan --target artifact.bin       # show automatic artifact/capability plan
+python3 run.py --category service --target host:port # bounded TCP transcript helper
 ```
 
 ไม่ต้องติดตั้ง dependency ใดๆ (stdlib ล้วน) — ถ้ามี `nmap`, `pycryptodome` จะทำงานได้ลึกขึ้น
