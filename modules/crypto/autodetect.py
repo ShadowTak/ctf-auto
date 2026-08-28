@@ -1007,6 +1007,11 @@ def analyze_file(path, as_binary=None):
     from core.parallel import run_concurrent
     with open(path, "rb") as f:
         data = f.read()
+    try:
+        from .artifacts import extract as extract_artifacts
+        nested_artifacts = extract_artifacts(data)
+    except Exception:
+        nested_artifacts = [("root", data)]
     results = []
     flags = []
     as_text = data.decode("utf-8", errors="ignore")
@@ -1105,8 +1110,23 @@ def analyze_file(path, as_binary=None):
         return out
 
     def job_blobs():
-        """base64 blobs inside binaries + zip member strings."""
+        """Encoded blobs and recursively extracted container members."""
         out = []
+        for member_label, member_data in nested_artifacts:
+            member_text = member_data.decode("latin-1", "replace")
+            for f in _flag_hits(member_text):
+                out.append(("flag", None, f))
+            for m in re.finditer(rb"[A-Za-z0-9+/=]{40,}", member_data):
+                blob = m.group(0)
+                try:
+                    import base64
+                    rawb = base64.b64decode(blob, validate=True)
+                    if encodings.sniff_bytes(rawb) or b"flag" in rawb.lower() \
+                            or b"ctf" in rawb.lower():
+                        for f in _flag_hits(rawb.decode("latin-1", "replace")):
+                            out.append(("flag", None, f))
+                except Exception:
+                    pass
         for m in re.finditer(rb"[A-Za-z0-9+/=]{40,}", data):
             blob = m.group(0)
             try:
@@ -1116,18 +1136,6 @@ def analyze_file(path, as_binary=None):
                         or b"ctf" in rawb.lower():
                     for f in _flag_hits(rawb.decode("latin-1", "replace")):
                         out.append(("flag", None, f))
-            except Exception:
-                pass
-        if data[:2] == b"PK":
-            try:
-                import io
-                import zipfile
-                zf = zipfile.ZipFile(io.BytesIO(data))
-                for name in zf.namelist():
-                    inner = zf.read(name)
-                    for s in _extract_strings(inner):
-                        for f in _flag_hits(s):
-                            out.append(("flag", None, f))
             except Exception:
                 pass
         return out

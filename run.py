@@ -560,6 +560,9 @@ def main():
         from core.planner import capabilities, plan
         section("AUTO PLAN")
         print(plan(args.target or ""))
+        if args.target and args.category == "crypto":
+            from modules.crypto.solver_plan import describe
+            print("crypto:", describe(args.target))
         print("capabilities:", capabilities())
         if not (args.category or args.module or args.nmap_xml):
             return
