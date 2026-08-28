@@ -28,11 +28,7 @@ def workers(kind="io", requested=None):
 
 
 class Budget:
-    """Thread-safe request/time/node budget.
-
-    A budget is best-effort: in-flight requests are not forcibly interrupted,
-    but new work stops immediately after exhaustion.
-    """
+    """Thread-safe request/time/node budget."""
     def __init__(self, requests=0, seconds=0, nodes=0):
         self.request_limit = max(0, int(requests or 0))
         self.node_limit = max(0, int(nodes or 0))
@@ -67,3 +63,41 @@ class Budget:
     @property
     def nodes(self):
         return self._nodes
+
+
+_lock = threading.RLock()
+_active = None
+
+
+def configure(requests=0, seconds=0, nodes=0):
+    """Install a process-local budget for the current scan."""
+    global _active
+    with _lock:
+        _active = Budget(requests=requests, seconds=seconds, nodes=nodes)
+    return _active
+
+
+def clear():
+    global _active
+    with _lock:
+        _active = None
+
+
+def active():
+    with _lock:
+        return _active
+
+
+def take_request(amount=1):
+    current = active()
+    return current is None or current.take_request(amount)
+
+
+def take_node(amount=1):
+    current = active()
+    return current is None or current.take_node(amount)
+
+
+def expired():
+    current = active()
+    return bool(current and current.expired())

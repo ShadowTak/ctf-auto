@@ -278,7 +278,8 @@ def _run_web_once(jid, url, use_browser=False):
         _finish_job(jid, [], error=None if _job_cancelled(jid) else f"{e}\n{traceback.format_exc()}")
 
 
-def _run_web(jid, url, use_browser=False):
+def _run_web(jid, url, use_browser=False, deep=True,
+             max_seconds=0, max_requests=0):
     """Run one web job with an isolated process-local HTTP session.
 
     The solver modules intentionally share cookies and learned auth headers
@@ -287,14 +288,17 @@ def _run_web(jid, url, use_browser=False):
     within one scan.
     """
     from core import httpx
+    from core import budget
     from core.cancel import clear_event, set_event
     with _web_scan_lock:
         httpx.reset_session()
+        budget.configure(requests=max_requests, seconds=max_seconds)
         set_event(_jobs[jid]["cancel"])
         try:
             _run_web_once(jid, url, use_browser=use_browser)
         finally:
             clear_event()
+            budget.clear()
             httpx.reset_session()
             httpx.close_pool()
 
@@ -500,8 +504,16 @@ def api_scan():
             return jsonify({"job_id": jid})
         if not url.startswith("http"):
             url = "https://" + url
+        try:
+            max_seconds = max(0, int(data.get("max_seconds", 0) or 0))
+            max_requests = max(0, int(data.get("max_requests", 0) or 0))
+        except (TypeError, ValueError):
+            max_seconds, max_requests = 0, 0
         t = threading.Thread(target=_run_web, args=(jid, url),
-                             kwargs={"use_browser": bool(data.get("browser"))}, daemon=True)
+                             kwargs={"use_browser": bool(data.get("browser")),
+                                     "deep": bool(data.get("deep", True)),
+                                     "max_seconds": max_seconds,
+                                     "max_requests": max_requests}, daemon=True)
         t.start()
 
     elif category == "network":

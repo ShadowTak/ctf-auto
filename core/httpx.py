@@ -20,6 +20,7 @@ from http.cookies import SimpleCookie
 
 from .cancel import (cancelled, register_connection,
                      unregister_connection)
+from .budget import take_request, expired
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -275,7 +276,7 @@ def _decompress(body, resp_headers):
 
 
 def _request_once(method, url, data=None, headers=None, timeout=10):
-    if cancelled():
+    if cancelled() or expired() or not take_request():
         return None
     parsed = urllib.parse.urlparse(url)
     scheme = parsed.scheme.lower() or "http"

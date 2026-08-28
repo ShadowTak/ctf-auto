@@ -361,6 +361,8 @@ footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;marg
     <div class="scan-options" aria-label="Web scan options">
       <label><input type="checkbox" id="web-browser"> Browser/API discovery</label>
       <label><input type="checkbox" id="web-deep" checked> Deep CTF probes</label>
+      <label>Time <input type="number" id="web-seconds" value="180" min="0" max="3600" style="width:76px"></label>
+      <label>Requests <input type="number" id="web-requests" value="4000" min="0" max="100000" style="width:92px"></label>
     </div>
   </div>
 
@@ -530,6 +532,8 @@ function runScan(category) {
     body.url = document.getElementById('web-url').value.trim();
     body.browser = document.getElementById('web-browser').checked;
     body.deep = document.getElementById('web-deep').checked;
+    body.max_seconds = Number(document.getElementById('web-seconds').value || 0);
+    body.max_requests = Number(document.getElementById('web-requests').value || 0);
     if (!body.url) return alert('Enter a URL');
   } else if (category === 'crypto') {
     body.text = document.getElementById('crypto-text').value.trim();
