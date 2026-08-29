@@ -622,6 +622,248 @@ def api_stop(jid):
         return jsonify({"status": "stopping", "accepted": True})
 
 
+# ── Lattice / ECDSA Solver API ──────────────────────────────────────────────
+
+@app.route("/api/solver/lattice", methods=["POST"])
+def api_solver_lattice():
+    """Run lattice-based crypto solvers (Coppersmith, HNP, Boneh-Durfee)."""
+    data = request.json or {}
+    jid = _new_job()
+
+    def _run_lattice(jid):
+        try:
+            from modules.crypto.lattice import (
+                boneh_durfee, coppersmith_small_roots, hnp_solve,
+                available_backends)
+            results = [{"type": "backends", "data": available_backends()}]
+
+            # RSA small d (Boneh-Durfee)
+            n = data.get("n")
+            e = data.get("e")
+            if n and e:
+                result = boneh_durfee(int(n), int(e))
+                if result:
+                    d, p, q = result
+                    from modules.crypto.common import long_to_bytes, strip_zeros
+                    c = data.get("c")
+                    if c:
+                        pt = strip_zeros(long_to_bytes(pow(int(c), d, int(n))))
+                        results.append({"type": "flag", "flag": pt.decode("latin-1", "replace"),
+                                        "status": "verified", "method": "boneh-durfee",
+                                        "source": "lattice:solver"})
+                    results.append({"type": "result", "method": "boneh-durfee",
+                                    "data": {"d": str(d), "p": str(p), "q": str(q)}})
+
+            # HNP for partial nonce
+            remainders = data.get("remainders", [])
+            moduli = data.get("moduli", [])
+            bound = data.get("bound", 2)
+            if remainders and moduli:
+                candidates = hnp_solve(moduli, remainders, bound)
+                results.append({"type": "result", "method": "hnp",
+                                "data": {"candidates": [str(c) for c in candidates[:5]]}})
+
+            _finish_job(jid, results)
+        except Exception as e:
+            _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+    t = threading.Thread(target=_run_lattice, args=(jid,), daemon=True)
+    t.start()
+    return jsonify({"job_id": jid})
+
+
+@app.route("/api/solver/ecdsa", methods=["POST"])
+def api_solver_ecdsa():
+    """Analyze ECDSA signatures: nonce reuse, partial nonce, malleability."""
+    data = request.json or {}
+    jid = _new_job()
+
+    def _run_ecdsa(jid):
+        try:
+            from modules.crypto.ecdsa_solver import (
+                detect_nonce_reuse, malleable_variants,
+                extract_signatures_from_text, CURVES)
+            from core.flag import extract_flags
+            results = []
+
+            # Parse signatures from text input
+            text = data.get("text", "")
+            sigs = extract_signatures_from_text(text)
+            if sigs:
+                results.append({"type": "signatures-found", "count": len(sigs)})
+
+                # Detect nonce reuse
+                sig_dicts = [{"r": s["r"], "s": s["s"],
+                              "z": data.get("z", 0)} for s in sigs]
+                reuse = detect_nonce_reuse(sig_dicts)
+                for r in reuse:
+                    results.append({"type": "flag",
+                                    "flag": f"private_key={hex(r['private_key'])}",
+                                    "status": "verified",
+                                    "method": "ecdsa-nonce-reuse",
+                                    "source": "ecdsa:solver"})
+
+                # Check malleability
+                for s in sigs:
+                    variants = malleable_variants(s["r"], s["s"])
+                    if variants:
+                        results.append({"type": "result",
+                                        "method": "malleability",
+                                        "data": {"original": {"r": s["r"], "s": s["s"]},
+                                                   "variants": [{"r": v["r"], "s": v["s"]}
+                                                                for v in variants[:3]]}})
+
+            # Check for flags in input
+            known, candidates = extract_flags(text)
+            for flag in known:
+                results.append({"type": "flag", "flag": flag,
+                                "status": "verified", "source": "ecdsa:direct"})
+
+            _finish_job(jid, results)
+        except Exception as e:
+            _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+    t = threading.Thread(target=_run_ecdsa, args=(jid,), daemon=True)
+    t.start()
+    return jsonify({"job_id": jid})
+
+
+# ── Authenticated Workflow API ───────────────────────────────────────────────
+
+@app.route("/api/workflow/record", methods=["POST"])
+def api_workflow_record():
+    """Record a browser-based login flow."""
+    data = request.json or {}
+    url = data.get("url", "")
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    jid = _new_job()
+
+    def _run_record(jid):
+        try:
+            from modules.web.workflow import record_login_flow
+            result = record_login_flow(
+                url,
+                username=data.get("username"),
+                password=data.get("password"),
+                login_path=data.get("login_path"),
+                timeout=data.get("timeout", 20),
+            )
+            if result is None:
+                _finish_job(jid, [{"type": "error",
+                                  "data": "Playwright not available. Install: pip install playwright && playwright install chromium"}])
+            else:
+                results = [{"type": "auth-state", "data": result}]
+                # Check for flags in captured data
+                from core.flag import extract_flags
+                for token in result.get("tokens", []):
+                    known, _ = extract_flags(token)
+                    for flag in known:
+                        results.append({"type": "flag", "flag": flag,
+                                        "status": "verified", "source": "workflow:token"})
+                _finish_job(jid, results)
+        except Exception as e:
+            _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+    t = threading.Thread(target=_run_record, args=(jid,), daemon=True)
+    t.start()
+    return jsonify({"job_id": jid})
+
+
+@app.route("/api/workflow/replay", methods=["POST"])
+def api_workflow_replay():
+    """Replay captured auth state against target endpoints."""
+    data = request.json or {}
+    url = data.get("url", "")
+    auth_state = data.get("auth_state", {})
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    jid = _new_job()
+
+    def _run_replay(jid):
+        try:
+            from modules.web.workflow import replay_workflow
+            findings = replay_workflow(url, auth_state)
+            results = []
+            for finding in findings:
+                if finding.get("type") == "flag":
+                    results.append({"type": "flag", "flag": finding["flag"],
+                                    "status": "verified", "source": "workflow:replay"})
+                else:
+                    results.append({"type": "scan", "section": finding.get("type"),
+                                    "data": json.dumps(finding, default=str)[:1000]})
+            _finish_job(jid, results)
+        except Exception as e:
+            _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+    t = threading.Thread(target=_run_replay, args=(jid,), daemon=True)
+    t.start()
+    return jsonify({"job_id": jid})
+
+
+# ── Benchmark API ────────────────────────────────────────────────────────────
+
+@app.route("/api/benchmark", methods=["GET"])
+def api_benchmark():
+    """Run challenge corpus benchmark."""
+    jid = _new_job()
+
+    def _run_bench(jid):
+        try:
+            from tests.corpus.benchmark import benchmark_crypto
+            result = benchmark_crypto()
+            _finish_job(jid, [{"type": "benchmark", "data": result}])
+        except Exception as e:
+            _finish_job(jid, [], error=f"{e}\n{traceback.format_exc()}")
+
+    t = threading.Thread(target=_run_bench, args=(jid,), daemon=True)
+    t.start()
+    return jsonify({"job_id": jid})
+
+
+# ── Evidence Dashboard API ───────────────────────────────────────────────────
+
+@app.route("/api/evidence/<jid>")
+def api_evidence(jid):
+    """Get structured evidence data for the live dashboard."""
+    with _lock:
+        job = _jobs.get(jid)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    elapsed = (job["finished"] or time.time()) - job["started"]
+    results = job["results"]
+
+    # Classify results into dashboard sections
+    flags = [r for r in results if r.get("type") == "flag"]
+    candidates = [r for r in results if r.get("type") == "candidate"]
+    decodes = [r for r in results if r.get("type") == "decode"]
+    scans = [r for r in results if r.get("type") in ("scan", "network", "image")]
+    errors = [r for r in results if r.get("type") == "error"]
+
+    return jsonify({
+        "status": job["status"],
+        "elapsed": round(elapsed, 1),
+        "summary": {
+            "total_findings": len(flags) + len(candidates),
+            "verified_flags": len(flags),
+            "candidates": len(candidates),
+            "decodes": len(decodes),
+            "scan_sections": len(scans),
+            "errors": len(errors),
+        },
+        "flags": flags,
+        "candidates": candidates[:20],
+        "decodes": decodes[:30],
+        "scans": scans[:20],
+        "error": job["error"],
+    })
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

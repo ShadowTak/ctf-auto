@@ -364,6 +364,7 @@ def crack_rsa(n=None, e=None, c=None, d=None, p=None, q=None, pem=None, n2=None)
             phi = (p_ - 1) * (q_ - 1)
             dd = invmod(e, phi)
             found.append(("fermat", strip_zeros(long_to_bytes(pow(c, dd, n)))))
+            return found
     except Exception:
         pass
 
