@@ -74,17 +74,36 @@ print("\n▸ RSA Fermat (close p,q)")
 flag3 = b"CTF{fermat_factor}"
 m3 = int.from_bytes(flag3, "big")
 # Generate proper primes close together for Fermat factorization
+def _is_prime_miller_rabin(n, k=12):
+    """Miller-Rabin primality test — deterministic for numbers < 3.3M digits."""
+    if n < 2: return False
+    if n == 2 or n == 3: return True
+    if n % 2 == 0: return False
+    r, d = 0, n - 1
+    while d % 2 == 0:
+        r += 1
+        d //= 2
+    for _ in range(k):
+        a = random.randrange(2, n - 1)
+        x = pow(a, d, n)
+        if x == 1 or x == n - 1:
+            continue
+        for _ in range(r - 1):
+            x = pow(x, 2, n)
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
 def _next_prime(n):
-    while True:
-        if n < 2:
-            n = 2
-        if n % 2 == 0:
-            n += 1
-        if n < 4:
-            return n
-        if all(n % i != 0 for i in range(3, min(int(n**0.5)+2, 1000))):
-            return n
+    """Find next prime >= n using Miller-Rabin."""
+    if n < 2: return 2
+    if n % 2 == 0: n += 1
+    while not _is_prime_miller_rabin(n):
         n += 2
+    return n
+
 p3 = _next_prime(random.getrandbits(256))
 q3 = _next_prime(p3 + random.randint(1, 50) * 2)
 n3 = p3 * q3

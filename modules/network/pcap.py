@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from core import flag as flaglib
 from . import intelligence as intelligence_mod
+from . import protocol_parsers as proto_mod
 
 MAX_STREAM = 8 * 1024 * 1024  # 8MB cap per TCP stream
 
@@ -281,6 +282,39 @@ def analyze_pcap(path):
     for src, dst, payload in info["icmp"]:
         scan_blob("icmp", payload)
 
+    # Protocol-specific analysis (FTP, SMTP, IRC, Telnet, Redis, MySQL, DNS tunnel)
+    proto_streams = {}
+    for (a, b), streams in info["streams"].items():
+        proto_streams[(a[0], a[1], b[0], b[1])] = {
+            b"c2s": streams[b"c2s"], b"s2c": streams[b"s2c"]
+        }
+    info["protocols"] = proto_mod.parse_all_protocols(
+        proto_streams,
+        udp_payloads=info["udp"],
+    )
+    # Collect credentials and protocol findings into flags/indicators
+    for cred in info["protocols"].get("credentials", []):
+        for val in cred.values():
+            if isinstance(val, str) and len(val) > 2:
+                known, cands = flaglib.extract_flags(val)
+                for f in known + cands:
+                    if f not in info["flags"]:
+                        info["flags"].append(f)
+    for f in info["protocols"].get("findings", []):
+        val = f.get("value", "")
+        if isinstance(val, str):
+            known, cands = flaglib.extract_flags(val)
+            for flag in known + cands:
+                if flag not in info["flags"]:
+                    info["flags"].append(flag)
+    # DNS tunnel reassembly → flags
+    dns = info["protocols"].get("dns_tunnel")
+    if dns and dns.get("reassembled"):
+        known, cands = flaglib.extract_flags(dns["reassembled"])
+        for f in known + cands:
+            if f not in info["flags"]:
+                info["flags"].append(f)
+
     # Passive indicator extraction from all reconstructed and datagram data.
     blobs = []
     for streams in info["streams"].values():
@@ -335,4 +369,9 @@ def format_pcap_report(info):
         for src, dst, payload in info["icmp"][:20]:
             lines.append(
                 f"  {src} -> {dst}  {payload[:80].decode('latin-1', 'replace')!r}")
+    # Protocol-specific findings
+    proto = info.get("protocols")
+    if proto:
+        proto_lines = proto_mod.format_protocol_report(proto)
+        lines.extend(proto_lines)
     return lines
