@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 
 from core import flag as flaglib
+from . import intelligence as intelligence_mod
 
 MAX_STREAM = 8 * 1024 * 1024  # 8MB cap per TCP stream
 
@@ -224,6 +225,7 @@ def analyze_pcap(path):
     packets = read_packets(path)
     info = {
         "packets": len(packets),
+        "indicators": {"links": [], "secrets": [], "ips": [], "decoded_blobs": []},
         "streams": defaultdict(lambda: {b"c2s": b"", b"s2c": b""}),
         "http": [],
         "udp": [],
@@ -279,6 +281,22 @@ def analyze_pcap(path):
     for src, dst, payload in info["icmp"]:
         scan_blob("icmp", payload)
 
+    # Passive indicator extraction from all reconstructed and datagram data.
+    blobs = []
+    for streams in info["streams"].values():
+        blobs.extend(("pcap:tcp-c2s", streams[b"c2s"]), ("pcap:tcp-s2c", streams[b"s2c"]))
+    blobs.extend(("pcap:udp", item[4]) for item in info["udp"])
+    blobs.extend(("pcap:icmp", item[2]) for item in info["icmp"])
+    for source, blob in blobs:
+        extracted = intelligence_mod.extract_indicators(blob.decode("latin-1", "replace"), source=source)
+        for key in info["indicators"]:
+            info["indicators"][key].extend(extracted[key])
+    for key in info["indicators"]:
+        if key == "links":
+            unique = {item["url"]: item for item in info["indicators"][key]}
+            info["indicators"][key] = sorted(unique.values(), key=lambda x: (-x["score"], x["url"]))[:200]
+        else:
+            info["indicators"][key] = list(dict.fromkeys(info["indicators"][key]))[:200]
     return info
 
 

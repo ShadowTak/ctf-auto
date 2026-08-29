@@ -11,6 +11,7 @@ from . import dns as dns_mod
 from . import nmap as nmap_mod
 from . import pcap as pcap_mod
 from . import services as services_mod
+from . import intelligence as intelligence_mod
 
 
 def _is_ip(target):
@@ -39,6 +40,7 @@ def run_network(target, chain_to_web=None, interactive=False):
 
     flags_found = []
     host = target
+    indicators = {"links": [], "secrets": [], "ips": [], "decoded_blobs": []}
 
     # 1) port scan
     print()
@@ -60,6 +62,12 @@ def run_network(target, chain_to_web=None, interactive=False):
     for port, banner in banners:
         b = banner if len(banner) < 160 else banner[:157] + "..."
         print(f"  [{port}] {b}")
+        extracted = intelligence_mod.extract_indicators(banner, source=f"banner:{port}")
+        indicators["links"].extend(extracted["links"])
+        indicators["secrets"].extend(extracted["secrets"])
+        indicators["ips"].extend(extracted["ips"])
+        indicators["decoded_blobs"].extend(extracted["decoded_blobs"])
+        flags_found.extend(extracted["flags"])
         if "FLAG IN BANNER" in banner:
             flags_found.append(banner)
 
@@ -83,7 +91,11 @@ def run_network(target, chain_to_web=None, interactive=False):
             if xfer:
                 ok_line("✅ Zone transfer สำเร็จ! บันทึก:")
                 for name, rtype, value in xfer:
-                    print(f"  {name}  {rtype}  {value}")
+                    line = f"{name}  {rtype}  {value}"
+                    print(f"  {line}")
+                    extracted = intelligence_mod.extract_indicators(line, source="dns")
+                    indicators["links"].extend(extracted["links"])
+                    indicators["secrets"].extend(extracted["secrets"])
             else:
                 warn_line("zone transfer ถูกปฏิเสธ")
         found = dns_mod.subdomain_brute(host)
@@ -115,7 +127,16 @@ def run_network(target, chain_to_web=None, interactive=False):
     else:
         warn_line("ไม่พบ web service — ลองใช้โหมด web ตรงๆ")
 
-    return flags_found
+    links = {item["url"]: item for item in indicators["links"]}
+    if links:
+        section("🔗 SUSPICIOUS LINKS / NETWORK INDICATORS")
+        for item in sorted(links.values(), key=lambda x: (-x["score"], x["url"]))[:100]:
+            marker = "!!!" if item["score"] >= 50 else "!" if item["score"] >= 25 else "*"
+            reason = "; ".join(item["reasons"])
+            print(f"  [{marker}] score={item['score']:>3} {item['url']} — {reason}")
+    for secret in indicators["secrets"][:50]:
+        print(f"  [!] credential-like value in {secret['source']}: {secret['value'][:120]}")
+    return list(dict.fromkeys(flags_found))
 
 
 def _analyze_pcap(path):
@@ -123,6 +144,25 @@ def _analyze_pcap(path):
     info = pcap_mod.analyze_pcap(path)
     for line in pcap_mod.format_pcap_report(info):
         print("  " + line)
+    indicators = {"links": [], "secrets": [], "ips": [], "decoded_blobs": []}
+    for _, _, req, resp in info.get("http", []):
+        for blob, source in ((req, "pcap:http-request"), (resp, "pcap:http-response")):
+            extracted = intelligence_mod.extract_indicators(
+                blob.decode("latin-1", "replace"), source=source)
+            for key in indicators:
+                indicators[key].extend(extracted[key])
+    for _, _, _, _, payload in info.get("udp", []):
+        extracted = intelligence_mod.extract_indicators(payload.decode("latin-1", "replace"), source="pcap:udp")
+        for key in indicators:
+            indicators[key].extend(extracted[key])
+    for _, _, payload in info.get("icmp", []):
+        extracted = intelligence_mod.extract_indicators(payload.decode("latin-1", "replace"), source="pcap:icmp")
+        for key in indicators:
+            indicators[key].extend(extracted[key])
+    for item in indicators["links"][:100]:
+        print(f"  [link score={item['score']}] {item['url']} — {'; '.join(item['reasons'])}")
+    for item in indicators["decoded_blobs"][:20]:
+        print(f"  [decoded blob] {item['decoded'][:180]}")
     flags = info["flags"]
     if flags:
         ok_line("FLAG ที่พบใน traffic:")
