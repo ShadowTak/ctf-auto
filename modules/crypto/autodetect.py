@@ -738,7 +738,7 @@ def _chain_decode_job(text):
     except Exception:
         pass
     try:
-        for path, cur in encodings.chain_decode_best(text)[:40]:
+        for path, cur in encodings.chain_decode_best(text):
             out.append((f"chain-best({path})", cur))
     except Exception:
         pass

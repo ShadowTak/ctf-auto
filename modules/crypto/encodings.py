@@ -1348,8 +1348,14 @@ def _chain_flaggy(s):
 
 def _chain_score(text):
     """Lower = better: English-ness minus a small length bonus (encoded data
-    shrinks as it is decoded)."""
+    shrinks as it is decoded). Hex/base32/base64 intermediate results get a
+    moderate score so the beam doesn't discard valid encoding chains."""
     from .common import text_score
+    # Hex strings (all [0-9a-fA-F]) are valid intermediates in encoding
+    # chains but text_score rejects them for low alpha ratio.
+    import re
+    if re.fullmatch(r"[0-9a-fA-F]+", text):
+        return 50.0 - len(text) * 0.05
     try:
         eng = text_score(text)
     except Exception:
