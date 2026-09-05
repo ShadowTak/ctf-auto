@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CTF Auto — ระบบประมวลผลสำหรับแข่ง",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1390,
+      820
+    ]
+  },
+  "components": [
+    {
+      "id": "batch-cli",
+      "type": "frontend",
+      "label": "คิวโจทย์ CLI",
+      "sublabel": "run.py --batch",
+      "pos": [
+        35,
+        185
+      ],
+      "size": [
+        230,
+        78
+      ]
+    },
+    {
+      "id": "upload-ui",
+      "type": "frontend",
+      "label": "คิวอัปโหลด",
+      "sublabel": "/api/upload?competition=1",
+      "pos": [
+        35,
+        515
+      ],
+      "size": [
+        230,
+        78
+      ]
+    },
+    {
+      "id": "isolated-runner",
+      "type": "backend",
+      "label": "แยก process ต่อโจทย์",
+      "sublabel": "run_isolated() + deadline",
+      "pos": [
+        350,
+        350
+      ],
+      "size": [
+        230,
+        86
+      ]
+    },
+    {
+      "id": "archive-pipeline",
+      "type": "backend",
+      "label": "ไฟล์และ archive",
+      "sublabel": "ZIP / TAR / compression",
+      "pos": [
+        675,
+        125
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "crypto-pipeline",
+      "type": "security",
+      "label": "RSA และ Crypto",
+      "sublabel": "ข้ามไฟล์ + decode chain",
+      "pos": [
+        675,
+        350
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "media-pipeline",
+      "type": "backend",
+      "label": "ภาพและ PCAP",
+      "sublabel": "forensics + packet analysis",
+      "pos": [
+        675,
+        580
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "local-evidence",
+      "type": "security",
+      "label": "หลักฐานผลลัพธ์",
+      "sublabel": "verified / candidate / decode",
+      "pos": [
+        1050,
+        350
+      ],
+      "size": [
+        265,
+        86
+      ]
+    },
+    {
+      "id": "competition-output",
+      "type": "database",
+      "label": "บันทึกและแสดงผล",
+      "sublabel": "JSON / Markdown / Web UI",
+      "pos": [
+        1050,
+        625
+      ],
+      "size": [
+        285,
+        86
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "batch-to-runner",
+      "from": "batch-cli",
+      "to": "isolated-runner"
+    },
+    {
+      "id": "upload-to-runner",
+      "from": "upload-ui",
+      "to": "isolated-runner"
+    },
+    {
+      "id": "runner-to-archive",
+      "from": "isolated-runner",
+      "to": "archive-pipeline"
+    },
+    {
+      "id": "runner-to-crypto",
+      "from": "isolated-runner",
+      "to": "crypto-pipeline"
+    },
+    {
+      "id": "runner-to-media",
+      "from": "isolated-runner",
+      "to": "media-pipeline"
+    },
+    {
+      "id": "archive-to-evidence",
+      "from": "archive-pipeline",
+      "to": "local-evidence"
+    },
+    {
+      "id": "crypto-to-evidence",
+      "from": "crypto-pipeline",
+      "to": "local-evidence"
+    },
+    {
+      "id": "media-to-evidence",
+      "from": "media-pipeline",
+      "to": "local-evidence"
+    },
+    {
+      "id": "evidence-to-output",
+      "from": "local-evidence",
+      "to": "competition-output",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "ใช้แข่งหลายโจทย์",
+      "items": [
+        "CLI ข้ามงานเดิมเมื่อ hash ของไฟล์ โค้ด และ dependency ตรงกัน",
+        "หน้าเว็บจัดคิวไฟล์และเก็บประวัติผลในแท็บ พร้อมดาวน์โหลด JSON"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "ความหมายของหลักฐาน",
+      "items": [
+        "ตรวจสมการ RSA กลับและเก็บข้อความที่ถอดได้ตามจริง",
+        "verified คือหลักฐานในเครื่อง ยังไม่ได้ส่งคำตอบไป scoreboard"
+      ]
+    }
+  ]
+}

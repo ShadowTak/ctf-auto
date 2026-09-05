@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CTF_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CTF_PYTHON="$CTF_ROOT/.venv/bin/python"
+if [[ ! -x "$CTF_PYTHON" ]]; then
+  echo "Run bash scripts/setup_competition.sh to prepare .venv" >&2
+  exit 1
+fi
+export PATH="$CTF_ROOT/.venv/bin:$PATH"
+export PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/ctf-auto-pycache"
+case "${1:-}" in
+  webui) shift; exec "$CTF_PYTHON" "$CTF_ROOT/web_app.py" "$@" ;;
+  doctor) shift; exec "$CTF_PYTHON" "$CTF_ROOT/update.py" --check "$@" ;;
+  *) exec "$CTF_PYTHON" "$CTF_ROOT/run.py" "$@" ;;
+esac

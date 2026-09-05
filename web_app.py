@@ -25,6 +25,8 @@ app.config["MAX_CONTENT_LENGTH"] = 128 * 1024 * 1024
 _jobs = {}   # job_id → {status, results, started, finished, error, cancel}
 _lock = threading.Lock()
 _web_scan_lock = threading.Lock()
+COMPETITION_WORKERS = min(4, max(1, (os.cpu_count() or 2) // 2))
+_competition_slots = threading.BoundedSemaphore(COMPETITION_WORKERS)
 
 
 def _detect_uploaded_kind(path, original=""):
@@ -33,6 +35,14 @@ def _detect_uploaded_kind(path, original=""):
     CTF artifacts are frequently misnamed (``flag.jpg`` containing a ZIP or
     a text dump with no extension), so this is deliberately not MIME-only.
     """
+    from core.planner import artifact_kind
+    detected = artifact_kind(path)
+    if detected in {"pcap", "pcapng"}:
+        return "pcap"
+    if detected == "image":
+        return "image"
+    if detected not in {"text", "binary"}:
+        return "binary"
     try:
         with open(path, "rb") as handle:
             head = handle.read(64)
@@ -45,7 +55,7 @@ def _detect_uploaded_kind(path, original=""):
         return "pcap"
     image_signatures = (
         b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a",
-        b"BM", b"RIFF",
+        b"BM",
     )
     if any(head.startswith(signature) for signature in image_signatures):
         return "image"
@@ -68,23 +78,15 @@ def _detect_uploaded_kind(path, original=""):
 
 def _is_clean_flag(f):
     """Check if a flag string looks like a real CTF flag (not garbage)."""
-    if not f or len(f) < 6 or len(f) > 80:
+    if not f or len(f) < 6 or len(f) > 300:
         return False
     if '{' not in f or '}' not in f:
         return False
     body = f.split('{', 1)[1].rstrip('}')
     if not body:
         return False
-    # Strict whitelist: only letters, digits, underscores, hyphens, spaces
-    # Reject anything with =, ], [, $, ~, @, |, ), (, ^, &, comma, backslash, etc.
-    allowed = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ -')
-    for c in body:
-        if c not in allowed:
-            return False
-    # No control chars or high-bit chars
-    if any(ord(c) < 32 or ord(c) > 126 for c in body):
-        return False
-    return True
+    # Must be printable ASCII without newlines or control chars
+    return all(32 <= ord(c) <= 126 and c not in "\r\n\t" for c in body)
 
 
 def _new_job():
@@ -151,6 +153,12 @@ def _run_crypto(jid, text=None, filepath=None, prefix_hint=None):
                     if _is_clean_flag(value):
                         results.append({"type": "flag", "flag": value,
                                         "status": "verified",
+                                        "confidence": finding.confidence,
+                                        "source": finding.source,
+                                        "evidence": list(finding.evidence),
+                                        "solution": solution})
+                    else:
+                        results.append({"type": "candidate", "value": value,
                                         "confidence": finding.confidence,
                                         "source": finding.source,
                                         "evidence": list(finding.evidence),
@@ -249,13 +257,18 @@ def _run_image(jid, filepath):
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-def _run_web_once(jid, url, use_browser=False, prefix_hint=None):
+def _run_web_once(jid, url, use_browser=False, prefix_hint=None, deep=True, stop_on_flag=False):
     try:
         from core.evidence import findings_from_flags
         from modules.web.scanner import run_web
         results = []
         results.append({"type": "target", "url": url})
-        output = run_web(url, interactive=False, use_browser=use_browser)
+        def publish(flags):
+            _publish_job_results(jid, results + [{"type": "candidate", "value": value,
+                "source": "web:live response", "evidence": ["Recovered from CTF HTTP response; verify against the challenge"]}
+                for value in flags])
+        output = run_web(url, interactive=False, use_browser=use_browser,
+                         deep=deep, on_progress=publish, stop_on_flag=stop_on_flag)
         if isinstance(output, dict):
             for k, v in output.items():
                 results.append({"type": "scan", "section": k,
@@ -285,7 +298,7 @@ def _run_web_once(jid, url, use_browser=False, prefix_hint=None):
 
 
 def _run_web(jid, url, use_browser=False, deep=True,
-             max_seconds=0, max_requests=0, prefix_hint=None):
+             max_seconds=0, max_requests=0, prefix_hint=None, stop_on_flag=False):
     """Run one web job with an isolated process-local HTTP session.
 
     The solver modules intentionally share cookies and learned auth headers
@@ -302,7 +315,7 @@ def _run_web(jid, url, use_browser=False, deep=True,
         set_event(_jobs[jid]["cancel"])
         try:
             _run_web_once(jid, url, use_browser=use_browser,
-                          prefix_hint=prefix_hint)
+                          prefix_hint=prefix_hint, deep=deep, stop_on_flag=stop_on_flag)
         finally:
             clear_event()
             budget.clear()
@@ -480,9 +493,69 @@ def _run_auto_file(jid, filepath, original=""):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+def _run_competition_file(jid, filepath, original="", prefix=None, category='auto', deep=False):
+    """Bounded upload worker for the competition queue; preserve early evidence."""
+    from core.competition import run_isolated
+    acquired = False
+
+    def convert(report):
+        results = [{"type": "auto", "kind": "competition", "path": original,
+                    "pipelines": ["isolated-auto"], "status": report.get("status", "running")}]
+        for item in report.get("findings", []):
+            row = {"source": item["source"].replace(str(filepath), original or "artifact"), "confidence": item["confidence"],
+                   "evidence": item["evidence"], "status": item["kind"]}
+            if item["kind"] == "verified":
+                row.update(type="flag", flag=item["value"])
+            elif item["kind"] == "candidate":
+                row.update(type="candidate", value=item["value"])
+            else:
+                row.update(type="decode", output=item["value"], method=item["source"], score=0)
+            results.append(row)
+        for item in report.get("artifacts", []):
+            if item.get("details"):
+                results.append({"type": "decode", "method": item.get("kind", "triage"),
+                                "output": json.dumps(item["details"], ensure_ascii=False, indent=2),
+                                "score": 0})
+        for note in report.get("notes", []):
+            results.append({"type": "decode", "method": "analysis limit", "score": 0,
+                            "output": json.dumps(note, ensure_ascii=False)})
+        return results
+
+    try:
+        while not _job_cancelled(jid):
+            acquired = _competition_slots.acquire(timeout=0.1)
+            if acquired:
+                break
+        if not acquired:
+            _finish_job(jid, [], cancelled=True)
+            return
+        with _lock:
+            event = _jobs[jid]["cancel"]
+        report = run_isolated(filepath, {"prefix": prefix, "deep": deep, "category": category}, 60,
+                              stop_event=event,
+                              on_progress=lambda r: _publish_job_results(jid, convert(r)))
+        error = report.get("error")
+        if report["status"] == "timeout":
+            error = "Reached 60-second competition deadline; partial evidence retained. Use CLI --job-seconds for more time."
+        _finish_job(jid, convert(report), error=error,
+                    cancelled=report["status"] == "cancelled")
+    except Exception as exc:
+        _finish_job(jid, [], error=str(exc))
+    finally:
+        if acquired:
+            _competition_slots.release()
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/capabilities")
+def api_capabilities():
+    from core.capabilities import detect_capabilities
+    return jsonify({"capabilities": [cap.as_dict() for cap in detect_capabilities()],
+                    "runtime": {"logical_cpus": os.cpu_count(), "parallel_jobs": COMPETITION_WORKERS,
+                                "fast_decode_depth": 64}})
 
 
 @app.route("/api/scan", methods=["POST"])
@@ -507,6 +580,20 @@ def api_scan():
             filepath = file_path
         if not text and not filepath:
             _finish_job(jid, [], error="No text or file provided")
+            return jsonify({"job_id": jid})
+        if data.get("competition") is True and text:
+            if len(text.encode("utf-8")) > 256 * 1024:
+                _finish_job(jid, [], error="Competition text limit is 256 KiB; upload a file instead")
+                return jsonify({"job_id": jid})
+            fd, filepath = tempfile.mkstemp(prefix="ctftext_", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            with _lock:
+                _jobs[jid]["cleanup_paths"] = [filepath]
+            threading.Thread(target=_run_competition_file,
+                             args=(jid, filepath, "Text input", prefix_hint or None),
+                             kwargs={"category": "crypto", "deep": bool(data.get("deep", False))},
+                             daemon=True).start()
             return jsonify({"job_id": jid})
         t = threading.Thread(target=_run_crypto, args=(jid,), kwargs={"text": text or None, "filepath": filepath, "prefix_hint": prefix_hint or None}, daemon=True)
         t.start()
@@ -535,6 +622,7 @@ def api_scan():
                                      "deep": bool(data.get("deep", True)),
                                      "max_seconds": max_seconds,
                                      "max_requests": max_requests,
+                                     "stop_on_flag": bool(data.get("stop_on_flag", False)),
                                      "prefix_hint": prefix_hint or None}, daemon=True)
         t.start()
 
@@ -581,8 +669,12 @@ def api_upload():
         jid = _new_job()
         with _lock:
             _jobs[jid]["cleanup_paths"] = [tmp]
-        threading.Thread(target=_run_auto_file, args=(jid, tmp, original),
-                         daemon=True).start()
+        competition = request.args.get("competition", "0").lower() in {"1", "true", "yes"}
+        worker = _run_competition_file if competition else _run_auto_file
+        kwargs = {"prefix": request.form.get("prefix"), "category": request.form.get("category", "auto"),
+                  "deep": request.form.get("deep", "0") == "1"} if competition else {}
+        threading.Thread(target=worker, args=(jid, tmp, original),
+                         kwargs=kwargs, daemon=True).start()
         payload["job_id"] = jid
         payload["auto"] = True
     else:

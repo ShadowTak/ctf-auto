@@ -8,6 +8,9 @@ venv/
 
 # Tool output
 reports/
+competition-results/
+.playwright-cli/
+output/
 *.pcap
 *.log
 

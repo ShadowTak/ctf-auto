@@ -1373,7 +1373,29 @@ def chain_decode_best(text, max_depth=12, max_branches=6,
     `max_branches` paths per layer, pruning by English-ness + flag presence.
 
     Returns list of (path_label, text) for every layer of every kept branch,
-    e.g. ('base64>hex>rot13', 'picoCTF{...}')."""
+    e.g. ('base64>hex>rot13', 'picoCTF{...}').
+
+    The typed graph is attempted first. It preserves binary intermediates
+    (compressed data, raw XOR output, archive members) that the historical
+    text-only beam cannot represent. The legacy beam below remains as a
+    compatibility fallback for non-flag free-form text.
+    """
+    from .fastlane import decode_fast
+    direct = decode_fast(text, max_depth=max_depth, max_nodes=max_nodes,
+                         timeout=min(1.0, timeout))
+    if direct:
+        return direct
+    try:
+        from .graph import decode_graph
+        typed = decode_graph(text, max_depth=max_depth,
+                             max_branches=max_branches,
+                             max_nodes=max_nodes, timeout=timeout)
+        typed_results = typed.results(include_binary=False)
+        if typed.flag_hits():
+            return typed_results
+    except Exception:
+        typed_results = []
+
     # Multi-layer encoding chains in CTF are short blobs. Long inputs (source
     # code, logs, config files) explode the beam with dozens of plausible
     # substrings — no flag hides under 20 layers of a 5 KB file. Punctuation-

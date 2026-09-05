@@ -41,7 +41,7 @@ def pmap(func, items, workers=32, desc="", timeout=None):
     return results
 
 
-def run_concurrent(funcs, workers=16, desc=""):
+def run_concurrent(funcs, workers=16, desc="", on_result=None):
     """Run a list of zero-arg callables concurrently; return list of results."""
     if not funcs:
         return []
@@ -60,6 +60,8 @@ def run_concurrent(funcs, workers=16, desc=""):
                 results[i] = fut.result()
             except Exception as exc:  # noqa: BLE001
                 results[i] = exc
+            if on_result is not None:
+                on_result(i, results[i])
             progress.tick()
             if cancelled():
                 for pending in futures:

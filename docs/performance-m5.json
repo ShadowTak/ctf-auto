@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-05",
+  "machine": {
+    "cpu": "Apple M5",
+    "logical_cpus": 10,
+    "ram_gib": 16
+  },
+  "method": "Single before/after isolated-worker run per synthetic fixture; process startup included; 6-second deadline. Illustrative measurements, not universal CTF solve rate.",
+  "cases": [
+    {
+      "case": "base64-8",
+      "bytes": 288,
+      "before_seconds": 0.816,
+      "before_status": "completed",
+      "before_correct": true,
+      "after_seconds": 0.165,
+      "after_status": "completed",
+      "after_correct": true
+    },
+    {
+      "case": "base64-16",
+      "bytes": 2892,
+      "before_seconds": 6.043,
+      "before_status": "timeout",
+      "before_correct": false,
+      "after_seconds": 0.169,
+      "after_status": "completed",
+      "after_correct": true
+    },
+    {
+      "case": "base64-24",
+      "bytes": 28924,
+      "before_seconds": 5.118,
+      "before_status": "completed",
+      "before_correct": false,
+      "after_seconds": 0.224,
+      "after_status": "completed",
+      "after_correct": true
+    },
+    {
+      "case": "mixed-9",
+      "bytes": 456,
+      "before_seconds": 0.914,
+      "before_status": "completed",
+      "before_correct": true,
+      "after_seconds": 0.162,
+      "after_status": "completed",
+      "after_correct": true
+    }
+  ]
+}

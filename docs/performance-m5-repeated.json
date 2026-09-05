@@ -1,0 +1,94 @@
+[
+  {
+    "case": "base64-8",
+    "bytes": 288,
+    "trials": [
+      {
+        "seconds": 0.165,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.165,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.168,
+        "status": "completed",
+        "correct": true
+      }
+    ],
+    "median_seconds": 0.165,
+    "correct": true
+  },
+  {
+    "case": "base64-16",
+    "bytes": 2892,
+    "trials": [
+      {
+        "seconds": 0.173,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.164,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.165,
+        "status": "completed",
+        "correct": true
+      }
+    ],
+    "median_seconds": 0.165,
+    "correct": true
+  },
+  {
+    "case": "base64-24",
+    "bytes": 28924,
+    "trials": [
+      {
+        "seconds": 0.323,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.221,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.22,
+        "status": "completed",
+        "correct": true
+      }
+    ],
+    "median_seconds": 0.221,
+    "correct": true
+  },
+  {
+    "case": "mixed-9",
+    "bytes": 424,
+    "trials": [
+      {
+        "seconds": 0.169,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.169,
+        "status": "completed",
+        "correct": true
+      },
+      {
+        "seconds": 0.166,
+        "status": "completed",
+        "correct": true
+      }
+    ],
+    "median_seconds": 0.169,
+    "correct": true
+  }
+]

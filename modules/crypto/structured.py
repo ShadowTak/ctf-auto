@@ -34,7 +34,7 @@ def _int(value):
     if isinstance(value, str):
         value = value.strip().replace("_", "")
         try:
-            return int(value, 0)
+            return int(value, 10) if re.fullmatch(r"[0-9]+", value) else int(value, 0)
         except ValueError:
             try:
                 return int(value, 16) if re.fullmatch(r"[0-9a-fA-F]+", value) else None
@@ -97,6 +97,12 @@ def _get(mapping, *names):
 
 def _rsa_results(obj):
     out = []
+    # Cross-record attacks must precede the expensive per-key factoring ladder.
+    from .rsa_bundle import records_from_bytes, solve_records
+    bundle = solve_records(records_from_bytes(json.dumps(obj).encode(), "JSON"))
+    bundle_plaintexts = [int(item["plaintext_hex"], 16) for item in bundle]
+    out.extend(("structured-" + item["method"], bytes.fromhex(item["plaintext_hex"]))
+               for item in bundle)
     for mapping in _walk(obj):
         # Direct n/e/c records, including RSA fault and shared-prime files.
         n = _int(_get(mapping, "n", "modulus"))
@@ -110,6 +116,8 @@ def _rsa_results(obj):
         qinv = _int(_get(mapping, "qinv", "q_inv", "iqmp"))
         prime_list = _get(mapping, "primes", "factors", "prime_factors")
         specialized = False
+        if n and e and 2 <= e <= 2**32 and c is not None:
+            specialized = any(m < n and pow(m, e, n) == c for m in bundle_plaintexts)
 
         # Multi-prime RSA and CRT exponent leaks are both common hard-mode
         # artifacts.  Solve these before generic factoring: a 2048-bit n with
@@ -215,6 +223,11 @@ def _rsa_results(obj):
 
     # Broadcast data is normally an array of {n,e,c} records.
     for mapping in _walk(obj):
+        # Re-read parameters for this mapping; do not reuse the last first-pass
+        # record when applying Franklin-Reiter to a different nested object.
+        n = _int(_get(mapping, "n", "modulus"))
+        e = _int(_get(mapping, "e", "exponent"))
+        c = _int(_get(mapping, "c", "ciphertext", "encrypted_flag"))
         inherited_e = _int(_get(mapping, "e", "exponent"))
         for key, value in mapping.items():
             if not isinstance(value, list) or len(value) < 2:
@@ -233,13 +246,14 @@ def _rsa_results(obj):
             exponents = sorted(set(e for _, e, _ in pairs))
             for exponent in exponents:
                 group = [p for p in pairs if p[1] == exponent]
-                if exponent < 2 or len(group) < exponent:
+                if exponent < 2 or exponent > 7 or len(group) < exponent:
                     continue
                 try:
                     # Try every exponent-sized subset: challenge files often
                     # include an extra decoy recipient.
                     from itertools import combinations
-                    for subset in combinations(group, exponent):
+                    from itertools import islice
+                    for subset in islice(combinations(group[:64], exponent), 256):
                         m = rsa.hastad_broadcast(list(subset))
                         if m is not None:
                             out.append(("structured-rsa-hastad", _plain(m)))
@@ -247,6 +261,9 @@ def _rsa_results(obj):
                     pass
 
         # Franklin-Reiter: two related messages under the same RSA modulus.
+        n = _int(_get(mapping, "n", "modulus"))
+        e = _int(_get(mapping, "e", "exponent"))
+        c = _int(_get(mapping, "c", "ciphertext", "encrypted_flag"))
         delta = _int(_get(mapping, "delta", "message_delta", "difference"))
         if n and e and c is not None and delta is not None:
             c2_related = _int(_get(mapping, "c2", "related_ciphertext",

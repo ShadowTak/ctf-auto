@@ -9,7 +9,7 @@ import re
 
 _INTEGER_RE = re.compile(
     r"(?im)(?:[\"']?)(n|n1|n2|n3|e|e1|e2|c|c1|c2|p|q|d|r|s|z|nonce|iv|tag|seed)"
-    r"(?:[\"']?)\s*[=:]\s*(0x[0-9a-f]+|\d{2,})"
+    r"(?:[\"']?)\s*[=:]\s*[\"']?(0x[0-9a-f]+|\d+)"
 )
 _HEX_RE = re.compile(r"(?i)\b[0-9a-f]{16,512}\b")
 _B64_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
@@ -18,29 +18,40 @@ _B64_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
 def collect(paths, max_files=256, max_bytes=8 * 1024 * 1024):
     """Return a deterministic, bounded recursive artifact inventory."""
     roots = paths if isinstance(paths, (list, tuple, set)) else [paths]
-    candidates = []
-    for root in roots:
-        if os.path.isfile(root):
-            candidates.append(root)
-        elif os.path.isdir(root):
-            for current, dirs, names in os.walk(root):
-                dirs.sort()
-                for name in sorted(names):
-                    candidates.append(os.path.join(current, name))
+    def candidates():
+        for root in roots:
+            if os.path.islink(root):
+                continue
+            if os.path.isfile(root):
+                yield os.fspath(root)
+            elif os.path.isdir(root):
+                for current, dirs, names in os.walk(root):
+                    dirs[:] = sorted(d for d in dirs if not d.startswith('.') and
+                                     d not in {'node_modules', 'venv', '__pycache__'} and
+                                     not os.path.islink(os.path.join(current, d)))
+                    for name in sorted(names):
+                        if not name.startswith('.'):
+                            yield os.path.join(current, name)
     files = []
     seen = set()
-    for path in candidates:
-        if len(files) >= max_files or path in seen or not os.path.isfile(path):
+    total = 0
+    for index, path in enumerate(candidates()):
+        if len(files) >= max_files or index >= max_files * 8:
+            break
+        if path in seen or os.path.islink(path) or not os.path.isfile(path):
             continue
         seen.add(path)
         try:
             size = os.path.getsize(path)
-            if size > max_bytes:
+            if size > max_bytes or total + size > 64 * 1024 * 1024:
                 continue
             with open(path, "rb") as handle:
                 data = handle.read(max_bytes + 1)
         except OSError:
             continue
+        if len(data) > max_bytes:
+            continue
+        total += len(data)
         files.append({"path": path, "size": size,
                       "sha256": hashlib.sha256(data).hexdigest(),
                       "data": data})
@@ -48,7 +59,7 @@ def collect(paths, max_files=256, max_bytes=8 * 1024 * 1024):
 
 
 def _value_key(kind, value):
-    return kind, str(value).lower()
+    return kind, str(value) if kind == "base64" else str(value).lower()
 
 
 def correlate(paths, max_files=256, max_bytes=8 * 1024 * 1024):
@@ -58,8 +69,10 @@ def correlate(paths, max_files=256, max_bytes=8 * 1024 * 1024):
     records = []
     for item in inventory:
         text = item["data"].decode("utf-8", "replace")
-        named = [(m.group(1).lower(), int(m.group(2), 0))
-                 for m in _INTEGER_RE.finditer(text)]
+        named = [(m.group(1).lower(), int(m.group(2),
+                  16 if m.group(2).lower().startswith('0x') else 10))
+                 for m in list(_INTEGER_RE.finditer(text))[:256]
+                 if len(m.group(2)) <= 2400]
         for name, value in named:
             key = _value_key(name, value)
             values.setdefault(key, set()).add(item["path"])
@@ -79,16 +92,20 @@ def correlate(paths, max_files=256, max_bytes=8 * 1024 * 1024):
     moduli = [(value, path) for kind, value, path in records
               if kind in {"n", "n1", "n2", "n3"} and value > 2]
     shared_factors = []
+    moduli = moduli[:64]
     for index, (left, left_path) in enumerate(moduli):
         for right, right_path in moduli[index + 1:]:
             common = __import__("math").gcd(left, right)
             if 1 < common < min(left, right):
                 shared_factors.append({"gcd": common,
                                        "sources": sorted({left_path, right_path})})
+    from .rsa_bundle import solve_inventory
+    solutions = solve_inventory(inventory)
     return {"files": [{k: v for k, v in item.items() if k != "data"}
                       for item in inventory],
             "repeated": repeated,
             "shared_factors": shared_factors,
+            "solutions": solutions,
             "hints": sorted(set(hints + (["shared RSA prime candidate"]
                                            if shared_factors else [])))}
 

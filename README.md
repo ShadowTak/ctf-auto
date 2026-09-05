@@ -1,6 +1,23 @@
 # 🚩 CTF Auto Recon & Solver
 
-เครื่องมืออัตโนมัติสำหรับ CTF — สแกน เจาะ และหา **flag** ครอบคลุม 3 หมวดหลัก
+## Competition workspace / M5 update
+
+หน้าเว็บใหม่ธีม cyber แยก **Auto CTF / Crypto / Web / Network / Image** พร้อมฟอร์ม คิวและผลเฉพาะหมวด, คิวไฟล์ขนานสูงสุด 4 process, animation ที่หยุดได้ และ Export JSON
+
+```bash
+bash scripts/setup_competition.sh
+./ctf webui --host 127.0.0.1 --port 8088
+./ctf --batch ./challenges --jobs 4 --job-seconds 90 --output ./results --resume
+./ctf doctor
+```
+
+Crypto เพิ่มทางด่วน 64 ชั้นและ RSA ข้ามไฟล์/สมาชิก archive ก่อน fallback ที่ซับซ้อน บน M5 10 คอร์ ชุดทดสอบ Base64 8/16/24 ชั้น และ mixed compression 9 ชั้นถอดตรงคำตอบใน **0.16–0.22 วินาที รวม startup** เป็นตัวเลขจาก fixture สังเคราะห์ ไม่ใช่คำรับประกันต่อโจทย์ทุกชนิด Web เพิ่ม early evidence และแก้ตัวเลือก Deep ให้มีผลจริง
+
+อ่าน [คู่มือการแข่งขัน ขอบเขต และแหล่ง writeup](docs/competition-upgrade.md), [ผลวัด M5](docs/performance-m5.json) และ [แผนผังระบบแบบ interactive](diagrams/ctf-auto.competition.html) แยกผล verified / candidate / decode; verified หมายถึงหลักฐานในเครื่อง ยังไม่ได้ส่ง scoreboard
+
+---
+
+เครื่องมืออัตโนมัติสำหรับ CTF — ความสามารถของโมดูลและคำสั่งเดิมมีดังนี้
 
 | หมวด | ความสามารถ |
 |------|-----------|

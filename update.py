@@ -32,13 +32,22 @@ TOOL_COMMANDS = {
     "binwalk": "binwalk",
     "nmap": "nmap",
     "tshark": "tshark",
+    "7zip": "7zz",
+    "john": "john",
+    "sqlmap": "sqlmap",
 }
 BREW_PACKAGES = {
+    "john": "john-jumbo",
+    "sqlmap": "sqlmap",
     "exiftool": "exiftool",
     "identify": "imagemagick",
     "zbarimg": "zbar",
     "steghide": "steghide",
     "binwalk": "binwalk",
+    "7zz": "sevenzip",
+    "tesseract": "tesseract",
+    "nmap": "nmap",
+    "tshark": "wireshark",
 }
 PYTHON_MODULES = {
     "Crypto": "pycryptodome",
@@ -47,6 +56,12 @@ PYTHON_MODULES = {
     "sympy": "sympy",
     "fpylll": "fpylll",
     "z3": "z3-solver",
+    "cysignals": "cysignals",
+    "pwnlib": "pwntools",
+    "elftools": "pyelftools",
+    "capstone": "capstone",
+    "pypdf": "pypdf",
+    "flask": "Flask",
 }
 
 
@@ -75,7 +90,14 @@ def repo_status():
 def check_python():
     print(f"Python: {sys.version.split()[0]} ({PYTHON})")
     for module, package in PYTHON_MODULES.items():
-        state = "installed" if importlib.util.find_spec(module) else "missing"
+        state = "missing"
+        if importlib.util.find_spec(module):
+            try:
+                probe = subprocess.run([PYTHON, "-c", "import " + module],
+                                       capture_output=True, timeout=10)
+                state = "ready" if probe.returncode == 0 else "broken import"
+            except subprocess.TimeoutExpired:
+                state = "import timeout"
         print(f"  {module:<12} {state:<9} ({package})")
 
 
@@ -163,9 +185,12 @@ def update_git():
 
 
 def verify():
-    files = [str(path) for path in ROOT.rglob("*.py")
-             if ".git" not in path.parts and "__pycache__" not in path.parts]
-    result = command([PYTHON, "-m", "py_compile", *files])
+    # Do not compile .venv/site-packages, challenge inputs or permission backups.
+    files = [ROOT / name for name in ("run.py", "web_app.py", "update.py")]
+    for name in ("core", "modules", "tests", "scripts"):
+        files.extend((ROOT / name).rglob("*.py"))
+    code = "import pathlib,sys; [compile(pathlib.Path(p).read_bytes(),p,'exec') for p in sys.argv[1:]]"
+    result = command([PYTHON, "-c", code, *map(str, files)])
     return result.returncode == 0
 
 

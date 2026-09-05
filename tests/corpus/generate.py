@@ -15,18 +15,29 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from modules.crypto.common import invmod, iroot
+from modules.crypto.factoring import _is_probable_prime
+
+_RNG = random.Random(20260905)
+
+def _prime(start):
+    value = start | 1
+    for _ in range(10000):
+        if _is_probable_prime(value):
+            return value
+        value += 2
+    raise RuntimeError("fixture prime search exhausted")
 
 
 def _gen_rsa(e, bits=512):
     """Generate a proper RSA key pair."""
-    while True:
-        p = random.getrandbits(bits // 2) | (1 << (bits // 2 - 1)) | 1
-        q = random.getrandbits(bits // 2) | (1 << (bits // 2 - 1)) | 1
+    for _ in range(64):
+        p = _prime(_RNG.getrandbits(bits // 2) | (1 << (bits // 2 - 1)))
+        q = _prime(_RNG.getrandbits(bits // 2) | (1 << (bits // 2 - 1)))
         n = p * q
         phi = (p - 1) * (q - 1)
-        if math.gcd(e, phi) == 1:
-            d = invmod(e, phi)
-            return n, e, d, p, q, phi
+        if p != q and math.gcd(e, phi) == 1:
+            return n, e, invmod(e, phi), p, q, phi
+    raise RuntimeError("fixture RSA generation exhausted")
 
 
 # ---------------------------------------------------------------------------
@@ -38,13 +49,10 @@ def generate_rsa_small_e():
     flag = b"ctf{rsa_small_e_trivial}"
     m = int.from_bytes(flag, "big")
     e = 3
-    # Choose n large enough that m^e < n
-    while True:
-        p = random.getrandbits(256) | 1
-        q = random.getrandbits(256) | 1
-        n = p * q
-        if n > m ** e + 1:
-            break
+    # The old 512-bit cap could never exceed this 526-bit m**3.
+    bits = max(512, (m**e).bit_length() + 4)
+    n, _, _, _, _, _ = _gen_rsa(e, bits=bits + bits % 2)
+    assert n > m**e
     c = pow(m, e, n)
     return {
         "category": "crypto",
@@ -60,15 +68,9 @@ def generate_rsa_fermat():
     flag = b"ctf{fermat_factor_ez}"
     m = int.from_bytes(flag, "big")
     e = 65537
-    # p and q close together
-    p = random.getrandbits(256) | 1
-    q = p + random.randint(1, 100) * 2 + 1  # Close but odd
+    p = _prime((1 << 255) + 20260905)
+    q = _prime(p + 128)
     n = p * q
-    phi = (p - 1) * (q - 1)
-    if math.gcd(e, phi) != 1:
-        q += 2
-        n = p * q
-        phi = (p - 1) * (q - 1)
     c = pow(m, e, n)
     return {
         "category": "crypto",
@@ -83,21 +85,12 @@ def generate_rsa_wiener():
     """RSA with small d (Wiener attack)."""
     flag = b"ctf{wiener_small_d}"
     m = int.from_bytes(flag, "big")
-    # Use small e so d = invmod(e, phi) is large; instead generate small d directly
-    e = 65537
-    # For Wiener, d < N^0.25 / 3. Use 256-bit N so d can be ~64 bits
-    p = random.getrandbits(128) | 1
-    q = random.getrandbits(128) | 1
-    n = p * q
-    phi = (p - 1) * (q - 1)
-    d = invmod(e, phi)
-    if d is None or d > n:
-        # Retry
-        p = random.getrandbits(128) | 1
-        q = random.getrandbits(128) | 1
-        n = p * q
-        phi = (p - 1) * (q - 1)
-        d = invmod(e, phi)
+    n, _, _, p, q, phi = _gen_rsa(65537, bits=256)
+    d = _prime(1 << 32)
+    while math.gcd(d, phi) != 1:
+        d = _prime(d + 2)
+    e = invmod(d, phi)
+    assert d * 3 < iroot(n, 4)
     c = pow(m, e, n)
     return {
         "category": "crypto",
@@ -115,12 +108,12 @@ def generate_rsa_broadcast():
     e = 3
     pairs = []
     for _ in range(e):
-        while True:
-            p = random.getrandbits(256) | 1
-            q = random.getrandbits(256) | 1
-            n = p * q
-            if n > m ** e and math.gcd(n, m) == 1:
+        for _attempt in range(64):
+            n, _, _, _, _, _ = _gen_rsa(e, bits=max(256, m.bit_length() + 18))
+            if n > m and all(math.gcd(n, item['n']) == 1 for item in pairs):
                 break
+        else:
+            raise RuntimeError("fixture broadcast generation exhausted")
         c = pow(m, e, n)
         pairs.append({"n": n, "e": e, "c": c})
     return {
@@ -265,12 +258,12 @@ def generate_rsa_broadcast_multi():
     e = 3
     pairs = []
     for _ in range(5):
-        while True:
-            p = random.getrandbits(256) | 1
-            q = random.getrandbits(256) | 1
-            n = p * q
-            if n > m ** e and math.gcd(n, m) == 1:
+        for _attempt in range(64):
+            n, _, _, _, _, _ = _gen_rsa(e, bits=max(256, m.bit_length() + 18))
+            if n > m and all(math.gcd(n, item['n']) == 1 for item in pairs):
                 break
+        else:
+            raise RuntimeError("fixture broadcast generation exhausted")
         c = pow(m, e, n)
         pairs.append({"n": n, "e": e, "c": c})
     return {

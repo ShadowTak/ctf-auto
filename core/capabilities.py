@@ -37,6 +37,10 @@ def detect_capabilities():
         _module("playwright", "Playwright browser automation"),
         _module("requests", "Requests HTTP backend"),
         _module("PIL", "Pillow image pixel backend"),
+        _module("pwnlib", "Pwntools exploit development"),
+        _module("elftools", "ELF static triage"),
+        _module("capstone", "Capstone disassembler"),
+        _module("pypdf", "PDF text and metadata"),
     ]
     for name, command in (("nmap", "nmap"), ("tshark", "tshark"),
                           ("curl", "curl"), ("hashcat", "hashcat"),
@@ -45,7 +49,8 @@ def detect_capabilities():
                           ("exiftool", "exiftool"),
                           ("tesseract", "tesseract"), ("zbarimg", "zbarimg"),
                           ("steghide", "steghide"), ("zsteg", "zsteg"),
-                          ("binwalk", "binwalk"), ("identify", "identify")):
+                          ("binwalk", "binwalk"), ("identify", "identify"),
+                          ("7zip", "7zz")):
         found = shutil.which(command)
         result.append(Capability(name, bool(found),
                                   f"{command} at {found}" if found else

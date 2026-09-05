@@ -1,10 +1,11 @@
-"""Evidence-aware findings shared by the crypto, web, and UI layers.
+"""Evidence-aware findings shared by crypto, web, and UI layers.
 
-The legacy scanners return ``list[str]`` for compatibility.  This module
-provides a richer representation without forcing every solver to change its
-return type at once.
+Legacy scanners still return ``list[str]``.  The ledger gives newer code a
+thread-safe place to retain provenance, confidence, and decode traces without
+forcing every solver to change its return type at once.
 """
 from dataclasses import dataclass, field
+import threading
 from typing import Iterable, Optional
 
 from .flag import extract_flags
@@ -13,7 +14,7 @@ _KIND_RANK = {"decode": 0, "candidate": 1, "verified": 2}
 
 
 def decode_trace(label):
-    """Turn a solver label into a compact human-readable decode path."""
+    """Turn a solver label into a compact, stable human-readable trace."""
     label = str(label or "").strip()
     if label.startswith("chain-best(") and ")" in label:
         body = label[len("chain-best("):label.find(")")]
@@ -50,25 +51,21 @@ def _clean_kind(kind):
 
 
 def looks_flag_shaped(value):
-    """Return whether *value* has a known or generic flag shape.
+    """Return whether a value has a known or generic flag shape.
 
-    Shape alone is intentionally not treated as proof.  Callers should use
-    ``verified=True`` only after the solver has independently validated it.
+    Shape is never proof by itself; callers must explicitly promote a finding
+    to ``verified`` after mathematical or exact-transform validation.
     """
     known, candidates = extract_flags(str(value), include_candidates=True)
     return bool(known or candidates)
 
 
 class EvidenceLedger:
-    """Deduplicate findings while retaining the strongest evidence.
-
-    A value can be discovered by many solvers.  The ledger merges those
-    observations and promotes ``decode -> candidate -> verified`` only when a
-    caller explicitly supplies stronger evidence.
-    """
+    """Thread-safe deduplicating evidence store."""
 
     def __init__(self):
         self._items = {}
+        self._lock = threading.RLock()
 
     @staticmethod
     def _key(value):
@@ -87,30 +84,34 @@ class EvidenceLedger:
         evidence = tuple(str(x) for x in (evidence or ()) if str(x))
         trace = tuple(str(x) for x in (trace or ()) if str(x))
         source = str(source or "unknown")
-        old = self._items.get(key)
-        if old is None:
-            item = Finding(raw, kind, source, max(0.0, float(confidence)),
-                           evidence + (("decode trace: " + " -> ".join(trace),)
-                                       if trace else ()), (source,))
-            self._items[key] = item
-            return item
-
-        if _KIND_RANK[kind] > _KIND_RANK[old.kind]:
-            old.kind = kind
-        old.confidence = max(old.confidence, float(confidence))
-        old.evidence = tuple(dict.fromkeys(old.evidence + evidence))
-        if trace:
+        try:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        trace_evidence = (("decode trace: " + " -> ".join(trace),)
+                          if trace else ())
+        with self._lock:
+            old = self._items.get(key)
+            if old is None:
+                item = Finding(raw, kind, source, confidence,
+                               evidence + trace_evidence, (source,))
+                self._items[key] = item
+                return item
+            if _KIND_RANK[kind] > _KIND_RANK[old.kind]:
+                old.kind = kind
+            old.confidence = max(old.confidence, confidence)
             old.evidence = tuple(dict.fromkeys(
-                old.evidence + ("decode trace: " + " -> ".join(trace),)))
-        old.sources = tuple(dict.fromkeys(old.sources + (source,)))
-        old.source = old.sources[0] if len(old.sources) == 1 else ",".join(old.sources)
-        return old
+                old.evidence + evidence + trace_evidence))
+            old.sources = tuple(dict.fromkeys(old.sources + (source,)))
+            old.source = (old.sources[0] if len(old.sources) == 1
+                          else ",".join(old.sources))
+            return old
 
     def add_flag(self, value, *, source="unknown", verified=False,
                  confidence=0.0, evidence=None, trace=None):
-        kind = "verified" if verified else "candidate"
-        return self.add(value, kind=kind, source=source,
-                        confidence=confidence, evidence=evidence, trace=trace)
+        return self.add(value, kind="verified" if verified else "candidate",
+                        source=source, confidence=confidence,
+                        evidence=evidence, trace=trace)
 
     def extend(self, findings):
         for finding in findings or ():
@@ -128,7 +129,9 @@ class EvidenceLedger:
         return self
 
     def all(self):
-        return sorted(self._items.values(),
+        with self._lock:
+            values = list(self._items.values())
+        return sorted(values,
                       key=lambda x: (-_KIND_RANK[x.kind],
                                      -x.confidence, x.value))
 
@@ -140,6 +143,9 @@ class EvidenceLedger:
         if kind:
             items = [x for x in items if x.kind == kind]
         return [x.value for x in items]
+
+    def as_dicts(self):
+        return [item.as_dict() for item in self.all()]
 
 
 def findings_from_flags(values, *, source="unknown", verified=False,

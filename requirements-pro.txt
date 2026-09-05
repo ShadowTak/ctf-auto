@@ -2,6 +2,13 @@
 z3-solver>=4.12
 sympy>=1.12
 fpylll>=0.6
+cysignals>=1.11
 playwright>=1.40
 requests>=2.31
 Pillow>=10.0
+pycryptodome>=3.20
+Flask>=3.0
+pwntools>=4.15
+pyelftools>=0.32
+capstone>=5.0
+pypdf>=6.0

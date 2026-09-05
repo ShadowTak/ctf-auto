@@ -2,6 +2,7 @@
 streams, pulls HTTP requests/responses and hunts for flags & secrets.
 No third-party deps (dpkt/scapy not required)."""
 import base64
+import json
 import re
 import struct
 import time
@@ -318,7 +319,7 @@ def analyze_pcap(path):
     # Passive indicator extraction from all reconstructed and datagram data.
     blobs = []
     for streams in info["streams"].values():
-        blobs.extend(("pcap:tcp-c2s", streams[b"c2s"]), ("pcap:tcp-s2c", streams[b"s2c"]))
+        blobs.extend([("pcap:tcp-c2s", streams[b"c2s"]), ("pcap:tcp-s2c", streams[b"s2c"])])
     blobs.extend(("pcap:udp", item[4]) for item in info["udp"])
     blobs.extend(("pcap:icmp", item[2]) for item in info["icmp"])
     for source, blob in blobs:
@@ -330,7 +331,9 @@ def analyze_pcap(path):
             unique = {item["url"]: item for item in info["indicators"][key]}
             info["indicators"][key] = sorted(unique.values(), key=lambda x: (-x["score"], x["url"]))[:200]
         else:
-            info["indicators"][key] = list(dict.fromkeys(info["indicators"][key]))[:200]
+            unique = {json.dumps(item, sort_keys=True, default=str): item
+                      for item in info["indicators"][key]}
+            info["indicators"][key] = list(unique.values())[:200]
     return info
 
 

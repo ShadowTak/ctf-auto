@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.parse
 import zlib
+from contextlib import contextmanager
 from http.cookies import SimpleCookie
 
 from .cancel import (cancelled, register_connection,
@@ -33,12 +34,18 @@ _CTX.verify_mode = ssl.CERT_NONE
 
 _TIMEOUT = 10
 _MAX_REDIRECTS = 5
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024
 
-# Session-wide settings configured via configure() / run.py CLI flags
+# Session-wide settings configured via configure() / run.py CLI flags.
+# ``_SESSION_EPOCH`` is part of every pool key: resetting a scan therefore
+# cannot reuse a keep-alive socket created by the previous target/thread.
 _GLOBAL_HEADERS = {}
 _PROXY_URL = None
 _COOKIE_JAR = {}
 _COOKIE_LOCK = threading.RLock()
+_SESSION_LOCK = threading.RLock()
+_SESSION_EPOCH = 0
 
 
 def _merge_cookie_header(value):
@@ -158,11 +165,60 @@ def configure(headers=None, cookie=None, proxy=None, timeout=None,
         _PROXY_URL = None
 
 
+def session_snapshot(redact=False):
+    """Return a serializable copy of the current process-local session.
+
+    ``redact=True`` is intended for UI evidence: it keeps cookie/header names
+    and safe metadata without exposing bearer tokens or session values.
+    """
+    with _SESSION_LOCK:
+        headers = dict(_GLOBAL_HEADERS)
+        proxy = _PROXY_URL
+        timeout = _TIMEOUT
+    cookies = cookie_snapshot()
+    if redact:
+        safe_headers = {
+            str(key): ("<redacted>" if any(token in str(key).lower()
+                                           for token in ("auth", "token", "cookie", "secret", "key"))
+                       else str(value)[:120])
+            for key, value in headers.items()
+        }
+        safe_cookies = {str(key): "<redacted>" for key in cookies}
+        headers, cookies = safe_headers, safe_cookies
+    return {"headers": headers, "cookies": cookies,
+            "proxy": proxy, "timeout": timeout}
+
+
+def restore_session(snapshot):
+    """Restore a snapshot produced by :func:`session_snapshot`."""
+    snapshot = snapshot or {}
+    reset_session()
+    configure(headers=snapshot.get("headers") or None,
+              proxy=snapshot.get("proxy"), timeout=snapshot.get("timeout"))
+    cookies = snapshot.get("cookies") or {}
+    if cookies:
+        with _COOKIE_LOCK:
+            _COOKIE_JAR.update({str(key): str(value)
+                                for key, value in cookies.items()})
+
+
+@contextmanager
+def session_scope():
+    """Isolate one scan and restore the caller's session on exit."""
+    saved = session_snapshot()
+    try:
+        yield
+    finally:
+        restore_session(saved)
+
+
 def reset_session():
-    """Clear cookies/headers/proxy (used between scans)."""
-    global _PROXY_URL
-    _GLOBAL_HEADERS.clear()
-    _PROXY_URL = None
+    """Clear cookies/headers/proxy and rotate pooled connection identity."""
+    global _PROXY_URL, _SESSION_EPOCH
+    with _SESSION_LOCK:
+        _GLOBAL_HEADERS.clear()
+        _PROXY_URL = None
+        _SESSION_EPOCH += 1
     with _COOKIE_LOCK:
         _COOKIE_JAR.clear()
 
@@ -208,7 +264,7 @@ class _ConnPool:
     def get(self, scheme, host, port):
         conns = self._conns()
         proxy = _proxy_parts()
-        key = (scheme, host, port, bool(proxy))
+        key = (scheme, host, port, bool(proxy), _SESSION_EPOCH)
         conn = conns.get(key)
         if conn is None:
             if proxy:
@@ -231,7 +287,7 @@ class _ConnPool:
 
     def evict(self, scheme, host, port):
         proxy = _proxy_parts()
-        key = (scheme, host, port, bool(proxy))
+        key = (scheme, host, port, bool(proxy), _SESSION_EPOCH)
         conn = self._conns().pop(key, None)
         if conn is not None:
             try:
@@ -262,17 +318,27 @@ def close_pool():
 
 
 def _decompress(body, resp_headers):
+    """Decompress common encodings without allowing decompression bombs."""
     enc = resp_headers.get("content-encoding", "").lower()
+    if not body:
+        return body
     try:
         if "gzip" in enc:
-            return gzip.decompress(body)
-        if "deflate" in enc:
-            return zlib.decompress(body)
-        if "br" in enc:
-            return body  # brotli not in stdlib; keep raw
+            obj = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            out = obj.decompress(body, MAX_DECOMPRESSED_BYTES + 1)
+        elif "deflate" in enc:
+            obj = zlib.decompressobj()
+            out = obj.decompress(body, MAX_DECOMPRESSED_BYTES + 1)
+        elif "br" in enc:
+            return body  # brotli is optional; preserve the compressed bytes
+        else:
+            return body
+        if len(out) > MAX_DECOMPRESSED_BYTES:
+            resp_headers["x-ctf-auto-truncated"] = "decompressed-body"
+            return out[:MAX_DECOMPRESSED_BYTES]
+        return out
     except Exception:
-        pass
-    return body
+        return body
 
 
 def _request_once(method, url, data=None, headers=None, timeout=10):
@@ -319,7 +385,10 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
             try:
                 conn.request(method, request_target, body=data, headers=hdrs)
                 resp = conn.getresponse()
-                body = resp.read()
+                body = resp.read(MAX_RESPONSE_BYTES + 1)
+                oversized = len(body) > MAX_RESPONSE_BYTES
+                if oversized:
+                    body = body[:MAX_RESPONSE_BYTES]
                 raw_headers = resp.getheaders()
                 r_headers = {}
                 set_cookies = []
@@ -334,6 +403,11 @@ def _request_once(method, url, data=None, headers=None, timeout=10):
                     for set_cookie in set_cookies:
                         _store_set_cookie(set_cookie)
                 body = _decompress(body, r_headers)
+                if oversized:
+                    r_headers["x-ctf-auto-truncated"] = "response-body"
+                    # The unread tail makes keep-alive unsafe. It is evicted
+                    # after this bounded response is returned.
+                    _POOL.evict(scheme, host, port)
                 _learn_auth(body, r_headers)
                 return Resp(resp.status, r_headers, body, url, reason=resp.reason)
             except (http.client.HTTPException, OSError, socket.timeout,

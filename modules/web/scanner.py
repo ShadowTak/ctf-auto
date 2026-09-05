@@ -5,6 +5,7 @@ after dirbust — each is internally threaded already, so wall time drops from
 the sum of phases to the slowest phase."""
 from core import httpx
 from core.evidence import findings_from_flags
+from .route_graph import AttackGraph, record_response, probe_authenticated
 from core.flag import extract_flags
 from core.output import flag_line, info_line, ok_line, section, warn_line
 from . import assets as assets_mod
@@ -43,6 +44,13 @@ def _cookie_headers(response):
     return values
 
 
+def _record(graph, url, response, *, method="GET", depth=0,
+            authenticated=False, tags=()):
+    """Record a response in the optional route graph and return its flags."""
+    return record_response(graph, url, response, method=method, depth=depth,
+                           authenticated=authenticated, tags=tags)
+
+
 def _response_flags(response):
     """Extract flags from body and metadata, including redirect headers."""
     if response is None:
@@ -79,7 +87,9 @@ def _unique_urls(base, values, limit=100):
     return out
 
 
-def run_web(target, interactive=False, use_browser=False, reset_session=True):
+def run_web(target, interactive=False, use_browser=False, reset_session=True,
+            deep=True, mode="active", context=None, graph=None, on_progress=None,
+            stop_on_flag=False):
     """Public entry. target = URL. Returns list of flags found.
 
     A scan owns its cookie/auth state by default. This prevents a batch
@@ -89,18 +99,30 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
     """
     if reset_session:
         httpx.reset_session()
+    if graph is None:
+        graph = AttackGraph(max_nodes=getattr(context, "max_nodes", 800) or 800)
+    if context is not None:
+        context.event("phase", "web scan started", target=target,
+                      mode=getattr(context, "mode", mode))
     section("🌐 WEB SCAN")
     base = httpx.normalize_url(target)
     info_line(f"target: {base}")
     flags = []
 
-    # sanity check
+    def publish():
+        if on_progress:
+            on_progress(list(dict.fromkeys(flags)))
+        return stop_on_flag and bool(flags)
+
     probe = httpx.get(base + "/", timeout=10)
     if probe is None:
         warn_line(f"เชื่อมต่อ {base} ไม่ได้ — ตรวจ URL หรือลอง http/https")
         return flags
+    flags.extend(_record(graph, base + "/", probe, tags=("entrypoint",)))
     ok_line(f"เชื่อมต่อได้ (HTTP {probe.status})")
     flags.extend(_response_flags(probe))
+    if publish():
+        return list(dict.fromkeys(flags))
     passive_inventory = parameter_inventory.inventory(
         probe.text, probe.headers.get("content-type", ""), base + "/")
     info_line("input surfaces: " + str(parameter_inventory.summarize(passive_inventory)))
@@ -108,11 +130,13 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
     # 1) recon
     extra_paths, recon_flags = recon_mod.run_recon(base)
     flags.extend(recon_flags)
+    if publish():
+        return list(dict.fromkeys(flags))
 
     # 2) asset / JS crawl: links, scripts, secrets, extra endpoints
     print()
     print("── Asset & JS crawl ──")
-    page = httpx.get(base + "/", timeout=10)
+    page = probe
     if page is not None:
         asset_findings, asset_flags, js_paths = assets_mod.scan_assets(
             base + "/", page.text)
@@ -122,6 +146,8 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         if js_paths:
             ok_line(f"JS เผย endpoint เพิ่ม {len(js_paths)} path")
             extra_paths.extend(js_paths)
+    if publish():
+        return list(dict.fromkeys(flags))
 
     # 2b) bounded recursive discovery: navigation/forms/JS/source maps and
     # OpenAPI/Swagger JSON are often the only place a challenge exposes its
@@ -134,6 +160,8 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         print(line)
     flags.extend(discovery_flags)
     extra_paths.extend(discovered_paths)
+    if publish():
+        return list(dict.fromkeys(flags))
     if discovered_pages:
         ok_line(f"ค้นหน้า/endpoint เพิ่ม {len(discovered_pages)} รายการ, route {len(discovered_paths)} รายการ")
     if use_browser:
@@ -147,6 +175,9 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
             warn_line(f"browser discovery: {browser_error}")
         flags.extend(browser_flags)
         extra_paths.extend(browser_paths)
+        for path in browser_paths:
+            graph.add_route(base + "/" + path, tags=("browser-route",), depth=1)
+            graph.add_edge(base + "/", base + "/" + path, relation="browser-discovered")
 
     # 3) directory brute force
     print()
@@ -170,11 +201,24 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
     else:
         warn_line("ไม่พบ path เพิ่มเติม")
 
+    if publish():
+        return list(dict.fromkeys(flags))
+
+    # Passive mode ends after route/asset inventory. This is useful when the
+    # operator wants a safe map first, while active mode continues into CTF
+    # probes below.
+    if str(mode or "active").lower() == "passive" or not deep:
+        if context is not None:
+            context.metadata["route_graph"] = graph.as_dict()
+            context.event("phase", "passive discovery finished",
+                          routes=graph.as_dict()["stats"]["nodes"])
+        return list(dict.fromkeys(flags))
+
     # 3a-5) deep phases run CONCURRENTLY — each is internally threaded, so the
     # wall time is max(phase) instead of the sum. Every phase returns
     # (print_lines, flags) and the outputs are printed in order afterwards.
     print()
-    home = httpx.get(base + "/", timeout=10)
+    home = probe
     interesting_statuses = {200, 201, 204, 301, 302, 307, 401, 403, 405, 500}
     discovered_endpoints = [
         base + "/" + p for p, s, _, _ in found
@@ -265,6 +309,21 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
             login_find, login_flags = login_mod.run_login_brute(base, home.text)
             lines += login_find
             fl += login_flags
+            success = bool(login_find)
+            if success:
+                auth_paths = list(dict.fromkeys(
+                    discovered_paths + extra_paths +
+                    ["admin", "dashboard", "profile", "api/me", "api/admin",
+                     "api/flag", "flag", "private", "internal"]))
+                auth_lines, auth_flags = probe_authenticated(
+                    base, auth_paths, graph=graph, context=context,
+                    max_paths=64)
+                lines += auth_lines
+                fl += auth_flags
+                graph.mark_auth()
+                if context is not None:
+                    context.event("auth", "login branch succeeded",
+                                  follow_up_routes=len(auth_paths))
             if not login_find:
                 lines.append("  [!] ไม่พบฟอร์ม login / ยังไม่เจอ credential ที่ใช้ได้")
         return lines, fl
@@ -324,9 +383,28 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         ("── Cookies & JWT ──", phase_cookies),
         ("── Advanced flows (JWT / GraphQL / SSRF / upload / race) ──", phase_advanced),
     ]
-    results = run_concurrent(
-        [fn for _, fn in phase_names], workers=len(phase_names),
-        desc="web deep scan")
+    # Login is intentionally first and isolated from the other active phases:
+    # a successful session must be followed by an authenticated branch, not
+    # raced against independent workers that may mutate/overwrite cookies.
+    login_result = phase_login()
+    flags.extend(login_result[1])
+    if publish():
+        return list(dict.fromkeys(flags))
+    results = [None] * len(phase_names)
+    results[4] = login_result
+    remaining = [
+        (index, fn) for index, (_, fn) in enumerate(phase_names)
+        if index != 4
+    ]
+    def phase_finished(index, result):
+        if not isinstance(result, Exception):
+            flags.extend(result[1])
+            publish()
+    parallel_results = run_concurrent(
+        [fn for _, fn in remaining], workers=len(remaining),
+        desc="web deep scan", on_result=phase_finished)
+    for (index, _), result in zip(remaining, parallel_results):
+        results[index] = result
     for (title, _), res in zip(phase_names, results):
         print()
         print(title)
@@ -337,6 +415,7 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
         for line in lines:
             print(line)
         flags.extend(fl)
+        publish()
 
     # dedupe flags
     flags = list(dict.fromkeys(flags))
@@ -360,6 +439,11 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True):
             flag_line(f)
     else:
         warn_line("ยังไม่เจอ flag — ลองรัน injections กับ endpoint อื่น หรือดู source")
+    if context is not None:
+        context.metadata["route_graph"] = graph.as_dict()
+        context.metadata["session"] = httpx.session_snapshot(redact=True)
+        context.event("phase", "web scan finished", flags=len(flags),
+                      routes=graph.as_dict()["stats"]["nodes"])
     return flags
 
 

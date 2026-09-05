@@ -32,22 +32,30 @@ def artifact_kind(path):
     if not path or not os.path.isfile(path):
         return "text"
     with open(path, "rb") as handle:
-        head = handle.read(32)
+        head = handle.read(512)
     signatures = ((b"PK", "zip/office"), (b"\x1f\x8b", "gzip"),
                   (b"BZh", "bzip2"), (b"\xfd7zXZ\x00", "xz"),
                   (b"\x89PNG", "image"), (b"\xff\xd8\xff", "image"),
-                  (b"GIF8", "image"), (b"%PDF", "pdf"),
+                  (b"GIF8", "image"), (b"BM", "image"),
+                  (b"II\x2a\x00", "image"), (b"MM\x00\x2a", "image"),
+                  (b"%PDF", "pdf"),
                   (b"\x7fELF", "elf"), (b"MZ", "pe"),
                   (b"SQLite format 3", "sqlite"), (b"\x0a\x0d\x0d\x0a", "pcapng"),
-                  (b"\xd4\xc3\xb2\xa1", "pcap"), (b"\xa1\xb2\xc3\xd4", "pcap"))
+                  (b"\xd4\xc3\xb2\xa1", "pcap"), (b"\xa1\xb2\xc3\xd4", "pcap"),
+                  (b"\x4d\x3c\xb2\xa1", "pcap"), (b"\xa1\xb2\x3c\x4d", "pcap"))
     for signature, kind in signatures:
         if head.startswith(signature):
             return kind
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "image"
+    if head[257:262] == b"ustar":
+        return "tar"
     try:
         with open(path, "rb") as handle:
             sample = handle.read(65536)
-        sample.decode("utf-8")
-        return "text"
+        text = sample.decode("utf-8")
+        return "text" if not text or sum(c.isprintable() or c in '\r\n\t'
+                                        for c in text) / len(text) >= 0.90 else "binary"
     except (OSError, UnicodeDecodeError):
         return "binary"
 
@@ -57,7 +65,7 @@ def plan(target):
     if os.path.isfile(target):
         kind = artifact_kind(target)
         pipelines = ["artifact-magic", "strings", "crypto-decode"]
-        if kind in {"zip/office", "gzip", "bzip2", "xz"}:
+        if kind in {"zip/office", "gzip", "bzip2", "xz", "tar"}:
             pipelines.append("recursive-container")
         if kind in {"image"}:
             pipelines.append("image-forensics")

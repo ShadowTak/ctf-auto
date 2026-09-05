@@ -1,814 +1,147 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#07100f">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2307100f'/%3E%3Cpath d='M3 3h10v2H3zM3 7h6v2H3zM3 11h10v2H3z' fill='%236dff9b'/%3E%3C/svg%3E">
-<title>CTF Auto — Operator Console</title>
-<style>
-/* Hallmark · macrostructure: Workbench · tone: technical · anchor hue: phosphor-green · theme: Terminal · nav: N8 · footer: Ft4 */
-/* ── Reset & Base ──────────────────────────────────────────────── */
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2235;--bg4:#222d44;
-  --border:#2a3650;--border2:#3a4a6a;
-  --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
-  --accent:#3b82f6;--accent2:#60a5fa;--accent-glow:rgba(59,130,246,.15);
-  --green:#10b981;--green-bg:rgba(16,185,129,.12);
-  --red:#ef4444;--red-bg:rgba(239,68,68,.12);
-  --yellow:#f59e0b;--yellow-bg:rgba(245,158,11,.12);
-  --purple:#a855f7;--purple-bg:rgba(168,85,247,.12);
-  --radius:12px;--radius-sm:8px;
-  --shadow:0 4px 24px rgba(0,0,0,.4);
-  --font:'SF Mono','JetBrains Mono','Fira Code',monospace;
-  --font-sans:-apple-system,'Inter',system-ui,sans-serif;
-}
-html{font-size:15px}
-body{
-  font-family:var(--font-sans);background:var(--bg);color:var(--text);
-  min-height:100vh;overflow-x:hidden;
-  background-image:
-    radial-gradient(ellipse 80% 60% at 50% -20%,rgba(59,130,246,.08),transparent),
-    radial-gradient(ellipse 60% 50% at 80% 100%,rgba(168,85,247,.06),transparent);
-}
-
-/* ── Layout ────────────────────────────────────────────────────── */
-.container{max-width:960px;margin:0 auto;padding:24px 20px 60px}
-header{text-align:center;padding:48px 0 32px}
-header h1:after{content:'▋';font-size:.55em;color:var(--green);margin-left:8px;animation:blink 1.1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
-header h1{
-  font-size:2.4rem;font-weight:800;letter-spacing:-.03em;
-  background:linear-gradient(135deg,var(--accent2),var(--purple));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-}
-header p{color:var(--text2);margin-top:8px;font-size:.95rem}
-/* ambient hacker-console motion */
-.scanline{position:fixed;inset:0;pointer-events:none;z-index:20;opacity:.045;background:repeating-linear-gradient(0deg,transparent 0 3px,rgba(109,255,155,.35) 4px);mix-blend-mode:screen;animation:scanline 10s linear infinite}
-.noise{position:fixed;inset:0;pointer-events:none;z-index:19;opacity:.035;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.4'/%3E%3C/svg%3E");animation:noise .25s steps(2) infinite}
-@keyframes scanline{from{transform:translateY(-8px)}to{transform:translateY(8px)}}
-@keyframes noise{0%{transform:translate(0)}25%{transform:translate(1%,-1%)}50%{transform:translate(-1%,1%)}75%{transform:translate(1%,1%)}to{transform:translate(0)}}
-
-/* ── Tabs ──────────────────────────────────────────────────────── */
-.tabs{
-  display:flex;gap:4px;background:var(--bg2);border-radius:var(--radius);
-  padding:4px;margin-bottom:28px;border:1px solid var(--border);
-}
-.tab{
-  flex:1;padding:14px 16px;text-align:center;cursor:pointer;
-  border-radius:var(--radius-sm);font-weight:600;font-size:.92rem;
-  color:var(--text3);transition:all .2s;border:1px solid transparent;
-  display:flex;align-items:center;justify-content:center;gap:8px;
-  user-select:none;
-}
-.tab:hover{color:var(--text);background:var(--bg3)}
-.tab.active{
-  background:var(--bg4);color:var(--text);
-  border-color:var(--border2);box-shadow:var(--shadow);
-}
-.tab .icon{font-size:1.2rem}
-
-/* ── Panel ─────────────────────────────────────────────────────── */
-.panel{
-  display:none;background:var(--bg2);border:1px solid var(--border);
-  border-radius:var(--radius);padding:28px;animation:fadeIn .25s ease;
-}
-.panel.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-
-.panel-title{
-  font-size:1.15rem;font-weight:700;margin-bottom:20px;
-  display:flex;align-items:center;gap:10px;
-}
-.panel-title .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.dot-web{background:var(--accent)}
-.dot-crypto{background:var(--purple)}
-.dot-net{background:var(--green)}
-
-/* ── Inputs ────────────────────────────────────────────────────── */
-.input-group{margin-bottom:18px}
-.input-group label{
-  display:block;font-size:.82rem;font-weight:600;color:var(--text2);
-  margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;
-}
-.input-row{display:flex;gap:10px;align-items:stretch}
-input[type="text"],input[type="url"],textarea{
-  width:100%;padding:13px 16px;border-radius:var(--radius-sm);
-  border:1px solid var(--border);background:var(--bg);color:var(--text);
-  font-family:var(--font);font-size:.9rem;transition:border .2s;
-  outline:none;
-}
-input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
-textarea{resize:vertical;min-height:100px}
-input::placeholder,textarea::placeholder{color:var(--text3)}
-
-/* ── File Drop ─────────────────────────────────────────────────── */
-.file-drop{
-  border:2px dashed var(--border);border-radius:var(--radius);
-  padding:36px 20px;text-align:center;cursor:pointer;
-  transition:all .2s;color:var(--text3);position:relative;
-}
-.file-drop:hover,.file-drop.drag-over{
-  border-color:var(--accent);background:var(--accent-glow);color:var(--text2);
-}
-.file-drop input[type="file"]{
-  position:absolute;inset:0;opacity:0;cursor:pointer;
-}
-.file-drop .icon{font-size:2rem;margin-bottom:8px;display:block}
-.file-drop .name{color:var(--accent2);font-weight:600;margin-top:8px;font-size:.9rem}
-
-/* ── Button ────────────────────────────────────────────────────── */
-.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  padding:13px 28px;border-radius:var(--radius-sm);border:none;
-  font-weight:700;font-size:.95rem;cursor:pointer;transition:all .2s;
-  font-family:var(--font-sans);
-}
-.btn-primary{
-  background:linear-gradient(135deg,var(--accent),#2563eb);color:#fff;
-  box-shadow:0 2px 12px rgba(59,130,246,.3);
-}
-.btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(59,130,246,.4)}
-.btn-primary:active{transform:translateY(0)}
-.btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
-.btn-sm{padding:10px 20px;font-size:.85rem}
-
-/* ── Results ───────────────────────────────────────────────────── */
-#results{
-  margin-top:28px;display:none;
-  background:var(--bg2);border:1px solid var(--border);
-  border-radius:var(--radius);overflow:hidden;animation:fadeIn .3s ease;
-}
-#results.show{display:block;animation:resultIn .35s var(--ease-out)}
-@keyframes resultIn{from{opacity:0;transform:translateY(12px) scale(.99)}to{opacity:1;transform:none}}
-.results-header{
-  padding:16px 20px;border-bottom:1px solid var(--border);
-  display:flex;align-items:center;justify-content:space-between;
-}
-.results-header h3{font-size:1rem;font-weight:700;display:flex;align-items:center;gap:8px}
-.results-header .elapsed{color:var(--text3);font-size:.82rem;font-family:var(--font)}
-.results-body{padding:0;max-height:500px;overflow-y:auto}
-.results-body::-webkit-scrollbar{width:6px}
-.results-body::-webkit-scrollbar-track{background:transparent}
-.results-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-
-/* ── Result Items ──────────────────────────────────────────────── */
-.r-item{
-  padding:14px 20px;border-bottom:1px solid var(--border);
-  transition:background .15s;
-}
-.r-item:last-child{border-bottom:none}
-.r-item:hover{background:rgba(255,255,255,.02)}
-.r-item .label{
-  font-size:.75rem;font-weight:600;text-transform:uppercase;
-  letter-spacing:.04em;margin-bottom:6px;display:flex;align-items:center;gap:6px;
-}
-.r-item .label .badge{
-  display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7rem;
-}
-.badge-flag{background:var(--green-bg);color:var(--green)}
-.badge-decode{background:var(--purple-bg);color:var(--purple)}
-.badge-scan{background:var(--accent-glow);color:var(--accent2)}
-.badge-net{background:var(--yellow-bg);color:var(--yellow)}
-.badge-target{background:var(--bg4);color:var(--text2)}
-.badge-file{background:var(--bg4);color:var(--text2)}
-.badge-error{background:var(--red-bg);color:var(--red)}
-.r-item .value{
-  font-family:var(--font);font-size:.85rem;color:var(--text);
-  word-break:break-word;line-height:1.6;
-}
-.evidence-card{margin-top:10px;padding:12px;border:1px solid var(--line-2);background:rgba(7,16,15,.72);border-radius:var(--radius)}
-.evidence-card .evidence-title{display:flex;justify-content:space-between;gap:10px;align-items:center;color:var(--phosphor);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
-.evidence-card .evidence-path{margin-top:7px;color:var(--cyan);font-size:.78rem;word-break:break-all}
-.evidence-card .evidence-meta{margin-top:7px;color:var(--muted);font-size:.7rem;line-height:1.6}
-.evidence-card .evidence-steps{margin-top:8px;display:grid;gap:6px}
-.evidence-step{display:grid;grid-template-columns:24px 1fr;gap:8px;padding:7px 8px;background:var(--ink-0);border-left:2px solid var(--line-2);font-size:.72rem}
-.evidence-step .step-no{color:var(--phosphor);font-weight:700}.evidence-step .step-op{color:var(--cyan)}
-.evidence-step code{display:block;margin-top:3px;color:var(--paper);white-space:pre-wrap;word-break:break-all}
-.status-verified{color:var(--phosphor)}.status-candidate{color:var(--amber)}.status-raw{color:var(--muted)}
-.r-item .value .score{
-  display:inline-block;background:var(--bg4);padding:2px 8px;
-  border-radius:4px;font-size:.75rem;color:var(--text2);margin-right:8px;
-}
-.r-item .value .method{color:var(--accent2);font-weight:600}
-.solution{margin-top:10px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)}
-.solution-summary{color:var(--accent2);font-size:.78rem;font-weight:700}
-.solution-scope{color:var(--text3);font-size:.72rem;margin-top:3px}
-.solution details{margin-top:6px}.solution summary{cursor:pointer;color:var(--text2);font-size:.72rem}
-.solution-steps{margin-top:6px;display:grid;gap:5px}.solution-step{font-size:.72rem;color:var(--text2);line-height:1.5}
-.solution-step code{color:var(--text);font-family:var(--font);word-break:break-all}
-.decode-output{margin:8px 0 0;padding:8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)}
-
-/* ── Flag highlight ────────────────────────────────────────────── */
-.flag-found{
-  background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(16,185,129,.05));
-  border-left:3px solid var(--green);
-}
-.flag-found .value{color:var(--green);font-weight:600;font-size:.95rem}
-
-/* ── Loading ───────────────────────────────────────────────────── */
-.spinner{
-  display:inline-block;width:18px;height:18px;border:2px solid var(--border);
-  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
-}
-@keyframes spin{to{transform:rotate(360deg)}}
-.loading-text{color:var(--text2);font-size:.9rem;display:flex;align-items:center;gap:10px}
-
-/* ── Empty state ───────────────────────────────────────────────── */
-.empty{text-align:center;padding:48px 20px;color:var(--text3)}
-.empty .icon{font-size:3rem;margin-bottom:12px;display:block}
-
-/* ── Summary bar ───────────────────────────────────────────────── */
-.summary{
-  display:flex;gap:12px;padding:14px 20px;border-top:1px solid var(--border);
-  flex-wrap:wrap;
-}
-.summary .stat{
-  display:flex;align-items:center;gap:6px;font-size:.82rem;font-weight:600;
-}
-.summary .stat .num{
-  width:22px;height:22px;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;font-size:.75rem;font-weight:700;
-}
-.stat-flags .num{background:var(--green-bg);color:var(--green)}
-.stat-decodes .num{background:var(--purple-bg);color:var(--purple)}
-.stat-warnings .num{background:var(--yellow-bg);color:var(--yellow)}
-
-/* ── Responsive ────────────────────────────────────────────────── */
-@media(max-width:640px){
-  header h1{font-size:1.8rem}
-  .tabs{flex-direction:column}
-  .tab{padding:12px}
-  .input-row{flex-direction:column}
-  .panel{padding:20px}
-}
-
-/* ── Operator-console skin ────────────────────────────────────── */
-:root{
-  --ink-0:#07100f;--ink-1:#0b1716;--ink-2:#10211e;--ink-3:#15302b;
-  --line-1:#1d3b35;--line-2:#2b5b50;
-  --paper:#d7f7df;--muted:#87aaa0;--dim:#54766e;
-  --phosphor:#6dff9b;--cyan:#71e5e0;--amber:#ffc857;--danger:#ff6b6b;
-  --phosphor-soft:rgba(109,255,155,.10);--cyan-soft:rgba(113,229,224,.10);
-  --danger-soft:rgba(255,107,107,.11);--amber-soft:rgba(255,200,87,.11);
-  --shadow-console:0 18px 50px rgba(0,0,0,.28);
-  --ease-out:cubic-bezier(.22,1,.36,1);
-  --bg:var(--ink-0);--bg2:var(--ink-1);--bg3:var(--ink-2);--bg4:var(--ink-3);
-  --border:var(--line-1);--border2:var(--line-2);--text:var(--paper);--text2:var(--muted);--text3:var(--dim);
-  --accent:var(--cyan);--accent2:var(--cyan);--accent-glow:var(--cyan-soft);
-  --green:var(--phosphor);--green-bg:var(--phosphor-soft);--red:var(--danger);--red-bg:var(--danger-soft);
-  --yellow:var(--amber);--yellow-bg:var(--amber-soft);--purple:var(--cyan);--purple-bg:var(--cyan-soft);
-  --radius:4px;--radius-sm:3px;--shadow:var(--shadow-console);
-  --font:'SF Mono','JetBrains Mono','Fira Code',ui-monospace,monospace;
-  --font-sans:ui-monospace,'SF Mono','JetBrains Mono',monospace;
-}
-html,body{overflow-x:clip}
-body{background-color:var(--ink-0);background-image:
-  linear-gradient(rgba(109,255,155,.025) 1px,transparent 1px),
-  linear-gradient(90deg,rgba(109,255,155,.018) 1px,transparent 1px);
-  background-size:32px 32px;font-family:var(--font-sans)}
-.container{max-width:1180px;padding:28px 28px 34px}
-header{text-align:left;padding:26px 0 28px;border-bottom:1px solid var(--line-1);margin-bottom:22px;position:relative}
-header:after{content:'// AUTHORIZED CTF LAB';position:absolute;right:0;bottom:12px;color:var(--dim);font:11px var(--font);letter-spacing:.12em}
-header h1{font-size:clamp(2rem,5vw,3.6rem);font-weight:800;letter-spacing:-.07em;color:var(--paper);background:none;-webkit-text-fill-color:initial}
-header h1 span{color:var(--phosphor)}
-header p{color:var(--muted);margin-top:10px;font-size:.84rem;letter-spacing:.04em}
-.header-kicker{color:var(--phosphor);font-size:.72rem;letter-spacing:.15em;margin-bottom:8px}
-.header-meta{position:absolute;right:0;top:28px;color:var(--cyan);font-size:.72rem;letter-spacing:.08em}
-.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--phosphor);box-shadow:0 0 12px var(--phosphor);margin-right:7px}
-.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:0;background:var(--ink-1);border:1px solid var(--line-1);border-radius:var(--radius);padding:0;margin-bottom:18px;overflow:hidden}
-.tab{border-right:1px solid var(--line-1);border-radius:0;padding:13px 15px;justify-content:flex-start;color:var(--muted);font-size:.78rem;letter-spacing:.04em;transition:background .16s var(--ease-out),color .16s var(--ease-out),transform .16s var(--ease-out)}
-.tab:last-child{border-right:0}.tab:before{content:'> ';color:var(--dim)}
-.tab:hover{color:var(--paper);background:var(--ink-2)}
-.tab.active{color:var(--phosphor);background:var(--ink-3);border-color:var(--line-2);box-shadow:inset 0 -2px 0 var(--phosphor)}
-.tab.active:before{color:var(--phosphor)}
-.tab .icon{font-size:.9rem;filter:grayscale(1);opacity:.85}
-.panel,#results{background:rgba(11,23,22,.92);border:1px solid var(--line-1);border-radius:var(--radius);box-shadow:var(--shadow-console)}
-.panel{padding:24px;animation:fadeIn .2s var(--ease-out)}
-.panel-title{font-size:.95rem;letter-spacing:.03em;text-transform:uppercase;margin-bottom:22px;color:var(--paper)}
-.panel-title:before{content:'[ ';color:var(--dim)}.panel-title:after{content:' ]';color:var(--dim)}
-.panel-title .dot{width:8px;height:8px;border-radius:1px}.dot-web{background:var(--cyan)}.dot-crypto{background:var(--phosphor)}.dot-net{background:var(--amber)}
-.input-group label{font-size:.7rem;color:var(--muted);letter-spacing:.12em}
-input[type="text"],input[type="url"],textarea{background:var(--ink-0);border-color:var(--line-1);border-radius:var(--radius);color:var(--paper);font-size:.82rem}
-input:focus,textarea:focus{border-color:var(--phosphor);box-shadow:0 0 0 2px var(--phosphor-soft)}
-input::placeholder,textarea::placeholder{color:var(--dim)}
-.file-drop{border-color:var(--line-2);border-radius:var(--radius);padding:30px 20px;background:rgba(7,16,15,.48);font-size:.82rem}
-.file-drop:hover,.file-drop.drag-over{border-color:var(--phosphor);background:var(--phosphor-soft);color:var(--paper)}
-.file-drop .name{color:var(--phosphor)}
-.btn{border-radius:var(--radius);font-family:var(--font);font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;transition:background .16s var(--ease-out),border-color .16s var(--ease-out),color .16s var(--ease-out),transform .16s var(--ease-out);white-space:nowrap}
-.btn:focus-visible,.tab:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--phosphor);outline-offset:2px}
-.btn-primary{background:var(--phosphor);color:var(--ink-0);border:1px solid var(--phosphor);box-shadow:none}
-.btn-primary:hover{background:#a0ffb8;box-shadow:0 0 18px var(--phosphor-soft);transform:translateY(-1px)}
-.btn-primary:disabled{background:var(--line-2);border-color:var(--line-2);color:var(--muted);opacity:1}
-.btn-danger{background:transparent;color:var(--danger);border:1px solid var(--danger)}
-.btn-danger:hover{background:var(--danger-soft);transform:translateY(-1px)}
-.btn-danger:disabled{opacity:.55;cursor:wait}
-.results-header{padding:14px 18px;border-color:var(--line-1);background:var(--ink-2);gap:12px}
-.results-header h3{font-size:.82rem;letter-spacing:.04em;text-transform:uppercase;min-width:0}
-.results-actions{display:flex;align-items:center;gap:12px;margin-left:auto}.results-header .elapsed{color:var(--cyan);font-size:.75rem}
-.job-status{color:var(--muted);font:11px var(--font);letter-spacing:.07em;padding:8px 18px;border-bottom:1px solid var(--line-1);background:var(--ink-1)}
-.job-status.running{color:var(--phosphor)}.job-status.stopping{color:var(--amber)}.job-status.cancelled{color:var(--danger)}
-.results-body{max-height:560px}.r-item{padding:13px 18px;border-color:var(--line-1)}.r-item:hover{background:var(--phosphor-soft);transform:translateX(2px)}
-.r-item{transition:background .16s var(--ease-out),transform .16s var(--ease-out)}
-.r-item .label{font-size:.66rem;letter-spacing:.11em}.r-item .value{font-size:.8rem;color:var(--paper)}
-.solution{border-color:var(--line-2);background:var(--ink-1)}.solution-summary{color:var(--cyan)}.solution-scope,.solution summary{color:var(--muted)}.solution-step{color:var(--paper)}.solution-step code{color:var(--paper)}.decode-output{border-color:var(--line-2);background:var(--ink-0);color:var(--paper)}
-.badge{border-radius:2px!important;border:1px solid currentColor;background:transparent!important;padding:2px 6px!important}
-.badge-flag{color:var(--phosphor)}.badge-decode,.badge-scan{color:var(--cyan)}.badge-net{color:var(--amber)}.badge-error{color:var(--danger)}
-.flag-found{background:var(--phosphor-soft);border-left:2px solid var(--phosphor)}.flag-found .value{color:var(--phosphor);font-size:.9rem}
-.spinner{border-color:var(--line-2);border-top-color:var(--phosphor);width:14px;height:14px}
-.summary{border-color:var(--line-1);background:var(--ink-1);padding:12px 18px}.summary .stat{font-size:.72rem;color:var(--muted)}
-.summary .stat .num{border-radius:2px;background:var(--ink-3);color:var(--phosphor)}
-.console-note{color:var(--dim);font-size:.72rem;line-height:1.7;margin-top:14px}.console-note code{color:var(--cyan)}
-.scan-options{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;color:var(--muted);font-size:.72rem}.scan-options label{display:flex;gap:7px;align-items:center}.scan-options input{accent-color:var(--phosphor)}
-footer{display:flex;justify-content:space-between;gap:16px;padding-top:18px;margin-top:22px;border-top:1px solid var(--line-1);color:var(--dim);font:10px var(--font);letter-spacing:.1em;text-transform:uppercase}
-@media(max-width:640px){
-  .container{padding:18px 14px 28px}header{padding:18px 0 22px}header:after{position:static;display:block;margin-top:12px}.header-meta{position:static;margin-bottom:12px}header h1{font-size:2rem}.tabs{grid-template-columns:repeat(2,1fr)}.tab{border-bottom:1px solid var(--line-1)}.tab:nth-child(2){border-right:0}.tab:nth-child(3),.tab:nth-child(4){border-bottom:0}.panel{padding:18px}.input-row{flex-direction:column}.results-actions{gap:6px}.results-actions .elapsed{display:none}footer{flex-direction:column;gap:8px}
-}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}.scanline,.noise{display:none}}
-[hidden]{display:none!important}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080d10">
+  <meta name="description" content="Your local CTF competition workspace. Queue challenges, decode artifacts and inspect the evidence.">
+  <title>CTF Auto — Mission Control</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/console.css">
+  <script src="/static/console.js" defer></script>
 </head>
 <body>
-<div class="scanline" aria-hidden="true"></div><div class="noise" aria-hidden="true"></div>
-<div class="container">
-  <header>
-    <div class="header-meta"><span class="live-dot"></span>SESSION READY · LOCAL OPERATOR</div>
-    <div class="header-kicker"><span class="live-dot"></span>CTF-AUTO // RECON TOOLCHAIN</div>
-    <h1>CTF Auto<span>_</span></h1>
-    <p>recon / decode / recover / verify — web · crypto · network · image</p>
-  </header>
-
-  <!-- ── Tabs ──────────────────────────────────────────────── -->
-  <div class="tabs" role="tablist" aria-label="CTF modules">
-    <div class="tab active" role="tab" tabindex="0" data-tab="web" onclick="switchTab('web')">
-      <span class="icon">🌐</span> Web
-    </div>
-    <div class="tab" role="tab" tabindex="0" data-tab="crypto" onclick="switchTab('crypto')">
-      <span class="icon">🔐</span> Crypto
-    </div>
-    <div class="tab" role="tab" tabindex="0" data-tab="network" onclick="switchTab('network')">
-      <span class="icon">🌍</span> Network
-    </div>
-    <div class="tab" role="tab" tabindex="0" data-tab="image" onclick="switchTab('image')">
-      <span class="icon">🖼️</span> Image
-    </div>
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+<svg class="icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></g></symbol>
+<symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-5-5 3-3m-1 5 3-3"/></g></symbol>
+<symbol id="i-network" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="9" y="2" width="6" height="5"/><rect x="2" y="17" width="6" height="5"/><rect x="16" y="17" width="6" height="5"/><path d="M12 7v5M5 17v-5h14v5"/></g></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="1"/><circle cx="8" cy="8" r="1.5"/><path d="m3 18 6-6 4 4 4-7 4 5"/></g></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5 2h9l5 5v15H5zM14 2v6h5M8 13h8M8 17h5"/></g></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V3m-5 5 5-5 5 5M3 15v6h18v-6"/></g></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M3 12h17m-6-6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+<symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 22V3c5-5 9 5 15 0v11c-6 5-10-5-15 0" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-chip" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="14" height="14"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></g></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="m3 7 9-5 9 5-9 5zm0 5 9 5 9-5M3 17l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 3"/></g></symbol>
+<symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 8V3h5m8 0h5v5M3 16v5h5m8 0h5v-5M1 12h22M8 8h8v8H8z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 2v14m-5-5 5 5 5-5M3 16v5h18v-5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="8" y="8" width="13" height="13"/><path d="M16 8V3H3v13h5"/></g></symbol>
+<symbol id="i-motion" viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-brackets" viewBox="0 0 24 24"><path d="M8 4H3v16h5m8-16h5v16h-5M14 7l-4 10" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+</defs></svg>
+<div class="ambient" aria-hidden="true"></div>
+<div class="sidebar-scrim" id="sidebar-scrim"></div>
+<aside class="sidebar" id="sidebar" aria-label="Main navigation">
+  <a class="brand" href="/" aria-label="CTF Auto home"><span class="brand-mark">C</span><span><span class="brand-name">CTF<span>_</span>AUTO</span><small>COMPETITION TOOLKIT</small></span></a>
+  <div class="nav-caption">OPERATIONS</div>
+  <nav aria-label="Analysis modules">
+    <button class="nav-button active" data-view="auto" aria-current="page"><svg aria-hidden="true"><use href="#i-grid"/></svg>Auto CTF<span class="nav-number">01</span></button>
+    <button class="nav-button" data-view="web"><svg aria-hidden="true"><use href="#i-globe"/></svg>Web<span class="nav-number">02</span></button>
+    <button class="nav-button" data-view="crypto"><svg aria-hidden="true"><use href="#i-key"/></svg>Crypto<span class="nav-number">03</span></button>
+    <button class="nav-button" data-view="network"><svg aria-hidden="true"><use href="#i-network"/></svg>Network<span class="nav-number">04</span></button>
+    <button class="nav-button" data-view="image"><svg aria-hidden="true"><use href="#i-image"/></svg>Image<span class="nav-number">05</span></button>
+  </nav>
+  <div class="nav-caption second">INTELLIGENCE</div>
+  <nav aria-label="Results and tools">
+    <button class="nav-button" data-view="findings"><svg aria-hidden="true"><use href="#i-flag"/></svg>Findings<span class="nav-number" id="nav-findings">00</span></button>
+    <button class="nav-button" data-view="toolbox"><svg aria-hidden="true"><use href="#i-chip"/></svg>Tool arsenal<span class="nav-number">↗</span></button>
+  </nav>
+  <div class="sidebar-foot">
+    <div class="engine-indicator"><span class="status-dot" id="engine-dot"></span><span id="engine-status">CONNECTING</span></div>
+    <p>Local tools. Traceable evidence.<br>Your next challenge starts here.</p>
+    <div class="rail-line"></div>
+    <div class="rail-version"><span>CTF AUTO</span><span>COMPETITION / 2026</span></div>
   </div>
-
-  <!-- ── Web Panel ─────────────────────────────────────────── -->
-  <div class="panel active" id="panel-web">
-    <div class="panel-title"><span class="dot dot-web"></span> Web Auto Scan</div>
-    <div class="input-group">
-      <label>Target URL</label>
-      <div class="input-row">
-        <input type="url" id="web-url" placeholder="https://target.ctf.com or http://10.10.10.1:8080">
-        <button class="btn btn-primary" onclick="runScan('web')">▶ Scan</button>
-      </div>
-    </div>
-    <div class="input-group" style="margin-top:14px">
-      <label>Optional Flag Prefix <span style="color:var(--text3)">(ctf = ctf{})</span></label>
-      <input type="text" id="web-prefix" placeholder="Optional: ctf, picoCTF, HTB, or ctf{}" autocomplete="off" spellcheck="false">
-      <div class="console-note">ใช้เป็น hint สำหรับจัดกลุ่มผลลัพธ์เท่านั้น ไม่กรอกก็สแกนตามปกติ</div>
-    </div>
-    <p style="color:var(--text3);font-size:.82rem;margin-top:-8px">
-      <span class="console-note">Auto-detects: recon, dirbust, SQLi, XSS, LFI, SSTI, CMDi, SSRF, IDOR, GraphQL, JWT, cookie forge, AES-CTR bit-flip, login brute, backup leak, flag scan</span>
-    </p>
-    <div class="scan-options" aria-label="Web scan options">
-      <label><input type="checkbox" id="web-browser"> Browser/API discovery</label>
-      <label><input type="checkbox" id="web-deep" checked> Deep CTF probes</label>
-      <label>Time <input type="number" id="web-seconds" value="180" min="0" max="3600" style="width:76px"></label>
-      <label>Requests <input type="number" id="web-requests" value="4000" min="0" max="100000" style="width:92px"></label>
-    </div>
+</aside>
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumb"><button class="icon-button menu-toggle" id="menu-toggle" aria-label="Open navigation" aria-expanded="false"><svg aria-hidden="true"><use href="#i-menu"/></svg></button><span class="crumb-root">WORKSPACE</span><span class="separator">/</span><strong id="breadcrumb-title">MISSION CONTROL</strong></div>
+    <div class="top-tools"><time class="time" id="clock"></time><span class="session-chip">LOCAL SESSION</span><button class="icon-button" id="motion-toggle" aria-label="Pause decorative animation" aria-pressed="false" title="Toggle motion"><svg aria-hidden="true"><use href="#i-motion"/></svg></button></div>
   </div>
-
-  <!-- ── Crypto Panel ──────────────────────────────────────── -->
-  <div class="panel" id="panel-crypto">
-    <div class="panel-title"><span class="dot dot-crypto"></span> Crypto Auto Decode</div>
-    <div class="input-group">
-      <label>Optional Flag Prefix <span style="color:var(--text3)">(ctf = ctf{})</span></label>
-      <input type="text" id="crypto-prefix" placeholder="Optional: ctf, picoCTF, HTB, or ctf{}" autocomplete="off" spellcheck="false">
-      <div class="console-note">ใช้เป็น hint เท่านั้น: กรอก <code>ctf</code> จะตีความเป็น <code>ctf{...}</code> และเว้นว่างได้</div>
+  <section id="hero" class="hero enter" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <div class="eyebrow">CAPTURE THE FLAG. OWN THE CHALLENGE.</div>
+      <h1 id="hero-title"><span id="hero-lead">HUNT THE</span><span class="hero-word" id="hero-accent">UNKNOWN.</span></h1>
+      <p class="hero-description" id="hero-description">Your competition command center. Drop the artifacts, uncover the patterns, and follow the evidence to your next flag.</p>
+      <div class="hero-bottom"><span>AUTO DETECTION</span><span>PARALLEL ANALYSIS</span><span>EVIDENCE FIRST</span></div>
     </div>
-    <div class="input-group">
-      <label>Text / Ciphertext</label>
-      <textarea id="crypto-text" placeholder="Paste ciphertext, hash, RSA params, encoded string...&#10;&#10;Examples:&#10;  n = 12345...&#10;  e = 65537&#10;  c = 99999...&#10;&#10;  VVZkV2JtRllUa1JX...&#10;&#10;  cipher_hex: 0327252b31...&#10;&#10;  10001000101000001..."></textarea>
+    <div class="orbital" aria-hidden="true">
+      <svg class="orbital-svg" viewBox="0 0 360 360">
+        <g class="fine axis"><path d="M180 3v354M3 180h354M55 55l250 250M305 55 55 305"/></g>
+        <g class="orbit-outer"><circle class="fine" cx="180" cy="180" r="156"/><circle class="strong" cx="180" cy="180" r="149" stroke-dasharray="140 48 3 28 40 180"/><path class="strong" d="M180 15v12m0 306v12M15 180h12m306 0h12"/><circle class="signal" cx="180" cy="24" r="3"/></g>
+        <g class="orbit-inner"><circle class="fine" cx="180" cy="180" r="132" stroke-dasharray="1 9"/><path class="beam" d="M180 51a129 129 0 1 1-1 0"/><circle class="signal" cx="51" cy="180" r="2"/></g>
+        <g class="sphere">
+          <circle class="fine" cx="180" cy="180" r="106"/>
+          <g class="fine"><ellipse cx="180" cy="180" rx="80" ry="106"/><ellipse cx="180" cy="180" rx="43" ry="106"/><ellipse cx="180" cy="180" rx="106" ry="40"/><ellipse cx="180" cy="180" rx="106" ry="76"/><path d="M74 180h212M180 74v212"/><ellipse cx="180" cy="137" rx="96" ry="26"/><ellipse cx="180" cy="223" rx="96" ry="26"/></g>
+          <g class="strong"><path d="m180 125 49 28v56l-49 28-49-28v-56zm0 0v56m49-28-49 28-49-28m49 28v56"/><path d="m151 165 29-17 29 17v31l-29 17-29-17z" opacity=".35"/></g>
+          <circle class="signal" cx="180" cy="125" r="3"/><circle class="signal" cx="229" cy="209" r="2.5"/><circle class="signal" cx="131" cy="209" r="2.5"/>
+        </g>
+      </svg>
+      <span class="orbital-label top">ARTIFACT → SIGNAL<b>ANALYSIS CORE</b></span><span class="orbital-label bottom">RECON · DECODE · VERIFY<b>CTF AUTO ENGINE</b></span><span class="crosshair">+</span>
     </div>
-    <div class="input-group">
-      <label>Or upload file</label>
-      <div class="file-drop" id="crypto-drop">
-        <input type="file" id="crypto-file" onchange="handleFile(this,'crypto')">
-        <span class="icon">📁</span>
-        <span>Drop file here or click to browse</span>
-        <span class="name" id="crypto-filename"></span>
-      </div>
-    </div>
-    <div style="text-align:right">
-      <button class="btn btn-primary" onclick="runScan('crypto')">▶ Decode</button>
-    </div>
-    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">Upload-first auto mode: detects text/binary/image/pcap, then runs every relevant crypto + embedded decode pipeline in parallel</span>
-    </p>
+  </section>
+  <div class="metrics enter delay-1" aria-label="Session statistics">
+    <div class="metric"><div><div class="metric-label">In queue</div><div class="sub">Ready for analysis</div></div><div class="metric-value" id="metric-queue">00</div></div>
+    <div class="metric"><div><div class="metric-label">Active jobs</div><div class="sub">Running right now</div></div><div class="metric-value" id="metric-active">00</div></div>
+    <div class="metric"><div><div class="metric-label">Verified flags</div><div class="sub">Local evidence</div></div><div class="metric-value accent" id="metric-flags">00</div></div>
+    <div class="metric"><div><div class="metric-label">Processed</div><div class="sub">This session</div></div><div class="metric-value" id="metric-done">00</div></div>
   </div>
-
-  <!-- ── Network Panel ─────────────────────────────────────── -->
-  <div class="panel" id="panel-network">
-    <div class="panel-title"><span class="dot dot-net"></span> Network Auto Analyze</div>
-    <div class="input-group">
-      <label>Upload pcap / pcapng file</label>
-      <div class="file-drop" id="net-drop">
-        <input type="file" id="net-file" onchange="handleFile(this,'network')" accept=".pcap,.pcapng,.cap">
-        <span class="icon">📦</span>
-        <span>Drop .pcap / .pcapng file here or click to browse</span>
-        <span class="name" id="net-filename"></span>
-      </div>
-    </div>
-    <div style="text-align:right">
-      <button class="btn btn-primary" onclick="runScan('network')">▶ Analyze</button>
-    </div>
-    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">Drop a pcap/pcapng to auto-run TCP reassembly, HTTP extraction, UDP/ICMP exfil hunting and crypto decode on captured blobs</span>
-    </p>
-  </div>
-
-  <!-- ── Image Panel ───────────────────────────────────────── -->
-  <div class="panel" id="panel-image">
-    <div class="panel-title"><span class="dot dot-net"></span> Image Forensics / Stego
-    </div>
-    <div class="input-group">
-      <label>Upload image artifact</label>
-      <div class="file-drop" id="image-drop">
-        <input type="file" id="image-file" onchange="handleFile(this,'image')"
-               accept="image/*,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,.ico,.pnm">
-        <span class="icon">🔎</span>
-        <span>Drop image here or click to browse</span>
-        <span class="name" id="image-filename"></span>
-      </div>
-    </div>
-    <div style="text-align:right">
-      <button class="btn btn-primary" onclick="runScan('image')">▶ Deep analyze</button>
-    </div>
-    <p style="color:var(--text3);font-size:.82rem;margin-top:12px">
-      <span class="console-note">Drop the file to auto-run crypto + image forensics: EXIF/XMP/PNG chunks, comments, strings, UTF-16, QR/OCR, LSB bit planes,
-      polyglot signatures, embedded files and automatic decode candidates
-      </span>
-    </p>
-  </div>
-
-  <!-- ── Results ───────────────────────────────────────────── -->
-  <div id="results">
-    <div class="results-header">
-      <h3><span class="spinner" id="spinner"></span> <span id="results-title">Results</span></h3>
-      <div class="results-actions">
-        <span class="elapsed" id="elapsed"></span>
-        <button id="stop-btn" class="btn btn-danger btn-sm" type="button" onclick="stopScan()" hidden>■ Stop</button>
-      </div>
-    </div>
-    <div id="job-status" class="job-status" aria-live="polite">IDLE // select a module and start a scan</div>
-    <div class="results-body" id="results-body"></div>
-    <div class="summary" id="summary"></div>
-  </div>
-  <footer><span>CTF-AUTO // OPERATOR CONSOLE</span><span>AUTHORIZED LAB USE ONLY · OUTPUT IS EVIDENCE, NOT EXPLOITATION</span></footer>
-</div>
-
-<script>
-/* ── State ─────────────────────────────────────────────────── */
-let currentTab = 'web';
-let uploadedFiles = {};
-let polling = null;
-let activeJobId = null;
-let stopRequested = false;
-
-/* ── Tab switching ─────────────────────────────────────────── */
-function switchTab(tab) {
-  currentTab = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('panel-' + tab).classList.add('active');
-  // Reset results
-  document.getElementById('results').classList.remove('show');
-}
-
-/* ── File handling ─────────────────────────────────────────── */
-function handleFile(input, category) {
-  const file = input.files[0];
-  if (!file) return;
-  const nameEl = document.getElementById(category === 'crypto' ? 'crypto-filename' :
-    category === 'image' ? 'image-filename' : 'net-filename');
-  nameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
-
-  // Upload to server
-  const fd = new FormData();
-  fd.append('file', file);
-  fetch('/api/upload', { method: 'POST', body: fd })
-    .then(r => r.json())
-    .then(d => {
-      if (!d.file_path) throw new Error(d.error || 'upload failed');
-      uploadedFiles[category] = d.file_path;
-      if (d.job_id) startAutoUploadJob(d.job_id, d.filename || file.name, d.kind);
-    })
-    .catch(e => { nameEl.textContent = 'Upload failed: ' + e; });
-}
-
-function startAutoUploadJob(jid, filename, kind) {
-  if (activeJobId) {
-    setJobStatus('QUEUED // finish the active scan before viewing the uploaded artifact', 'stopping');
-    return;
-  }
-  const resultsEl = document.getElementById('results');
-  resultsEl.classList.add('show');
-  document.getElementById('results-title').textContent = 'Auto-analyzing ' + filename;
-  document.getElementById('results-body').innerHTML =
-    '<div class="empty"><div class="loading-text"><span class="spinner"></span> Detecting file type and running all relevant solvers...</div></div>';
-  document.getElementById('summary').innerHTML = '';
-  document.getElementById('elapsed').textContent = '';
-  document.getElementById('spinner').hidden = false;
-  stopRequested = false;
-  activeJobId = jid;
-  setJobStatus('AUTO // ' + (kind || 'artifact') + ' → crypto + matching deep pipeline', 'running');
-  pollJob(jid);
-}
-
-/* ── Drag & drop ───────────────────────────────────────────── */
-document.querySelectorAll('.file-drop').forEach(el => {
-  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); });
-  el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
-  el.addEventListener('drop', e => {
-    e.preventDefault(); el.classList.remove('drag-over');
-    const input = el.querySelector('input[type="file"]');
-    input.files = e.dataTransfer.files;
-    input.dispatchEvent(new Event('change'));
-  });
-});
-
-/* ── Run scan ──────────────────────────────────────────────── */
-function runScan(category) {
-  if (activeJobId) {
-    setJobStatus('BUSY // stop the active scan before starting another one', 'stopping');
-    return;
-  }
-  const body = { category };
-
-  if (category === 'web') {
-    body.url = document.getElementById('web-url').value.trim();
-    body.browser = document.getElementById('web-browser').checked;
-    body.prefix = document.getElementById('web-prefix').value.trim();
-    body.deep = document.getElementById('web-deep').checked;
-    body.max_seconds = Number(document.getElementById('web-seconds').value || 0);
-    body.max_requests = Number(document.getElementById('web-requests').value || 0);
-    if (!body.url) return alert('Enter a URL');
-  } else if (category === 'crypto') {
-    body.text = document.getElementById('crypto-text').value.trim();
-    body.prefix = document.getElementById('crypto-prefix').value.trim();
-    if (uploadedFiles.crypto) body.file_path = uploadedFiles.crypto;
-    if (!body.text && !body.file_path) return alert('Enter text or upload a file');
-  } else if (category === 'network') {
-    if (!uploadedFiles.network) return alert('Upload a pcap file');
-    body.file_path = uploadedFiles.network;
-  } else if (category === 'image') {
-    if (!uploadedFiles.image) return alert('Upload an image file');
-    body.file_path = uploadedFiles.image;
-  }
-
-  // Show results panel
-  const resultsEl = document.getElementById('results');
-  resultsEl.classList.add('show');
-  document.getElementById('results-body').innerHTML = '<div class="empty"><div class="loading-text"><span class="spinner"></span> Scanning...</div></div>';
-  document.getElementById('results-title').textContent = 'Scanning...';
-  document.getElementById('elapsed').textContent = '';
-  document.getElementById('summary').innerHTML = '';
-  document.getElementById('spinner').hidden = false;
-  stopRequested = false;
-  setJobStatus('RUNNING // scanner is collecting evidence', 'running');
-
-  fetch('/api/scan', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  .then(r => r.json())
-  .then(d => {
-    if (!d.job_id) throw new Error(d.error || 'Server did not return a job id');
-    activeJobId = d.job_id;
-    pollJob(d.job_id);
-  })
-  .catch(e => {
-    activeJobId = null;
-    document.getElementById('stop-btn').hidden = true;
-    document.getElementById('spinner').hidden = true;
-    setJobStatus('ERROR // unable to start scan', 'stopping');
-    document.getElementById('results-body').innerHTML =
-      '<div class="r-item"><div class="label"><span class="badge badge-error">ERROR</span></div><div class="value">' + escHtml(e.message || e) + '</div></div>';
-  });
-}
-
-/* ── Poll job status ───────────────────────────────────────── */
-function pollJob(jid) {
-  if (polling) clearInterval(polling);
-  document.getElementById('stop-btn').hidden = false;
-  polling = setInterval(() => {
-    fetch('/api/status/' + jid)
-      .then(r => r.json())
-      .then(d => {
-        document.getElementById('elapsed').textContent = d.elapsed + 's';
-        if (d.status === 'stopping' || d.stop_requested || stopRequested) {
-          setJobStatus('STOPPING // waiting for safe cancellation point', 'stopping');
-        } else if (d.status === 'running') {
-          setJobStatus('RUNNING // collecting evidence', 'running');
-        }
-        if (d.status === 'done' || d.status === 'error' || d.status === 'cancelled') {
-          clearInterval(polling); polling = null;
-          activeJobId = null;
-          document.getElementById('stop-btn').hidden = true;
-          document.getElementById('spinner').hidden = true;
-          renderResults(d);
-        } else if (d.results && d.results.length) {
-          renderResults(d, true);
-        }
-      })
-      .catch(() => setJobStatus('WAITING // status poll retrying', 'stopping'));
-  }, 500);
-}
-
-function stopScan() {
-  if (!activeJobId || stopRequested) return;
-  const jid = activeJobId;
-  stopRequested = true;
-  const button = document.getElementById('stop-btn');
-  button.disabled = true;
-  button.textContent = '■ Stopping…';
-  // Stop the UI immediately; the backend request interrupts active sockets
-  // and cancels queued workers in parallel.
-  if (polling) { clearInterval(polling); polling = null; }
-  activeJobId = null;
-  button.hidden = true;
-  document.getElementById('spinner').hidden = true;
-  document.getElementById('results-title').textContent = '■ Scan stopped';
-  document.getElementById('results-body').innerHTML =
-    '<div class="empty"><span class="icon">■</span>Stop sent — active work was cancelled immediately.</div>';
-  document.getElementById('summary').innerHTML = '';
-  setJobStatus('CANCELLED // stop sent immediately; partial results discarded from view', 'cancelled');
-  fetch('/api/stop/' + jid, { method: 'POST' })
-    .then(r => r.json())
-    .then(d => {
-      if (!d.accepted && !['stopping', 'cancelled'].includes(d.status)) {
-        setJobStatus('WARNING // backend did not accept stop request', 'stopping');
-      }
-    })
-    .catch(() => {
-      setJobStatus('WARNING // stop request could not reach backend', 'stopping');
-    });
-}
-
-function setJobStatus(text, state) {
-  const el = document.getElementById('job-status');
-  el.textContent = text;
-  el.className = 'job-status' + (state ? ' ' + state : '');
-}
-
-function renderEvidence(r) {
-  const solution = r.solution || r.explanation;
-  if (!solution && !r.path && !r.source) return '';
-  const steps = (solution && solution.steps) || [];
-  const stepHtml = steps.map(step => `<div class="evidence-step"><span class="step-no">${escHtml(step.index || '')}</span><div><span class="step-op">${escHtml(step.operation || 'solver')}</span><code>IN: ${escHtml(step.input || '')}</code><code>OUT: ${escHtml(step.output || '')}</code></div></div>`).join('');
-  return `<div class="evidence-card"><div class="evidence-title"><span>Evidence trail</span><span class="status-${escHtml(r.status || 'raw')}">${escHtml((r.status || 'raw').toUpperCase())}</span></div>${r.source ? `<div class="evidence-path">source: ${escHtml(r.source)}</div>` : ''}${r.path ? `<div class="evidence-path">path: ${escHtml(r.path)}</div>` : ''}${r.evidence && r.evidence.length ? `<div class="evidence-meta">${escHtml(r.evidence.join(' · '))}</div>` : ''}${stepHtml ? `<div class="evidence-steps">${stepHtml}</div>` : ''}</div>`;
-}
-
-function renderSolution(solution, expanded) {
-  if (!solution) return '';
-  const steps = solution.steps || [];
-  const rows = steps.map(step => `
-    <div class="solution-step"><b>#${escHtml(step.index)}</b>
-      <span>${escHtml(step.operation || 'solver')}</span>:
-      <code>${escHtml(step.input || '')}</code> →
-      <code>${escHtml(step.output || '')}</code>
-    </div>`).join('');
-  return `<div class="solution">
-    <div class="solution-summary">HOW: ${escHtml(solution.summary || solution.method || 'solver')}</div>
-    <div class="solution-scope">scope: ${escHtml(solution.scope || 'input')}</div>
-    <details${expanded ? ' open' : ''}><summary>show decode steps (${steps.length})</summary>
-      <div class="solution-steps">${rows}</div>
-    </details>
-  </div>`;
-}
-
-/* ── Render results ────────────────────────────────────────── */
-function renderResults(data, live = false) {
-  const body = document.getElementById('results-body');
-  const title = document.getElementById('results-title');
-  const summary = document.getElementById('summary');
-  const results = data.results || [];
-
-  if (data.error && results.length === 0) {
-    body.innerHTML = '<div class="r-item flag-found"><div class="label"><span class="badge badge-error">ERROR</span></div><div class="value">' + escHtml(data.error) + '</div></div>';
-    title.textContent = '❌ Error';
-    summary.innerHTML = '';
-    setJobStatus('ERROR // scan failed', 'stopping');
-    return;
-  }
-
-  if (data.status === 'cancelled') {
-    title.textContent = '■ Scan stopped';
-    setJobStatus('CANCELLED // partial evidence retained below', 'cancelled');
-  } else if (live) {
-    setJobStatus('RUNNING // fast evidence shown; deep solvers still running', 'running');
-  } else {
-    setJobStatus('COMPLETE // evidence collection finished', '');
-  }
-
-  // Count stats
-  let flags = results.filter(r => r.type === 'flag');
-  let decodes = results.filter(r => r.type === 'decode');
-
-  // Build HTML
-  let html = '';
-  for (const r of results) {
-    if (r.type === 'flag') {
-      html += `<div class="r-item flag-found">
-        <div class="label"><span class="badge badge-flag">🏁 ${escHtml((r.status || 'verified').toUpperCase())} FLAG</span></div>
-        <div class="value">${escHtml(r.flag)}
-          <small class="method">${escHtml(r.source || '')}${r.evidence && r.evidence.length ? ' · ' + escHtml(r.evidence.join(' → ')) : ''}</small>
-          ${renderEvidence(r)}${renderSolution(r.solution, true)}
+  <section id="workspace" class="enter delay-2" aria-labelledby="workspace-title">
+    <div class="workspace-heading"><div><div class="section-index">01 / WORKSPACE</div><h2 id="workspace-title">Start your next mission.</h2></div><span class="small-note" id="workspace-note">AUTO DETECTION / ARCHIVE CORRELATION</span></div>
+    <div class="workspace-grid">
+      <section class="work-panel" aria-labelledby="input-heading">
+        <div class="panel-top"><h3 id="input-heading"><svg aria-hidden="true"><use href="#i-brackets"/></svg><span id="input-title">AUTO ARTIFACT INPUT</span></h3><span id="input-kind">AUTO CLASSIFY</span></div>
+        <div class="panel-content">
+          <div class="mode-tabs" id="mode-tabs" role="tablist" aria-label="Input type"><button class="mode-tab active" role="tab" id="tab-upload" aria-controls="mode-upload" aria-selected="true" data-mode="upload">Upload artifacts</button><button class="mode-tab" role="tab" id="tab-text" aria-controls="mode-text" aria-selected="false" data-mode="text">Decode text</button><button class="mode-tab" role="tab" id="tab-web" aria-controls="mode-web" aria-selected="false" data-mode="web">Web target</button></div>
+          <div id="mode-upload" role="tabpanel" aria-labelledby="tab-upload">
+            <input type="file" id="artifact-files" multiple hidden>
+            <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-label="Choose challenge files">
+              <span class="upload-emblem"><svg aria-hidden="true"><use href="#i-upload"/></svg></span>
+              <div class="upload-title" id="upload-title">Drop an artifact or challenge archive.</div>
+              <div class="upload-note">or click to browse · up to 16 MiB per file</div>
+            </div>
+            <div class="filetypes" id="filetypes"><span>CRYPTO</span><span>ARCHIVES</span><span>PCAP</span><span>IMAGES</span><span>ELF / PDF</span></div>
+            <div class="field"><label for="upload-prefix">FLAG FORMAT <span>OPTIONAL</span></label><input id="upload-prefix" type="text" placeholder="e.g. picoCTF, HTB, yourCTF" autocomplete="off" spellcheck="false"></div>
+            <div class="checkbox-row"><label><input id="upload-deep" type="checkbox">Keep exploring after a flag is found</label></div><button class="primary-button" id="browse-button"><svg aria-hidden="true"><use href="#i-upload"/></svg>LOAD CHALLENGES<svg aria-hidden="true"><use href="#i-arrow"/></svg></button>
+            <p class="panel-hint">Automatic file detection. Isolated analysis. A 60-second limit per artifact, with partial evidence kept along the way.</p>
+          </div>
+          <form id="mode-text" role="tabpanel" aria-labelledby="tab-text" hidden>
+            <div class="field"><label for="crypto-text">CIPHERTEXT / PARAMETERS</label><textarea id="crypto-text" placeholder="Paste encoded text, a hash, or RSA parameters…" required spellcheck="false"></textarea></div>
+            <div class="field"><label for="crypto-prefix">FLAG FORMAT <span>OPTIONAL</span></label><input id="crypto-prefix" type="text" placeholder="e.g. picoCTF" spellcheck="false"></div>
+            <div class="checkbox-row"><label><input id="crypto-deep" type="checkbox">Keep exploring after a flag is found</label></div><button class="primary-button" type="submit"><svg aria-hidden="true"><use href="#i-key"/></svg>DECODE SIGNAL<svg aria-hidden="true"><use href="#i-arrow"/></svg></button>
+            <p class="panel-hint">Layered decoding and structured crypto. Your decoded text stays exactly as recovered.</p>
+          </form>
+          <form id="mode-web" role="tabpanel" aria-labelledby="tab-web" hidden>
+            <div class="field"><label for="web-url">CHALLENGE URL</label><input id="web-url" type="url" placeholder="http://challenge.ctf:8080" required spellcheck="false"></div>
+            <div class="field"><label for="web-prefix">FLAG FORMAT <span>OPTIONAL</span></label><input id="web-prefix" type="text" placeholder="e.g. HTB" spellcheck="false"></div>
+            <div class="fields-row"><div class="field"><label for="web-seconds">TIME BUDGET · SEC</label><input id="web-seconds" type="number" min="1" max="3600" value="180" required></div><div class="field"><label for="web-requests">REQUEST BUDGET</label><input id="web-requests" type="number" min="1" max="100000" value="4000" required></div></div>
+            <div class="checkbox-row"><label><input id="web-browser" type="checkbox">Browser discovery</label><label><input id="web-deep" type="checkbox" checked>Deep CTF probes</label><label><input id="web-stop-flag" type="checkbox" checked>Finish discovery early on a flag candidate</label></div>
+            <button class="primary-button" type="submit"><svg aria-hidden="true"><use href="#i-scan"/></svg>LAUNCH RECON<svg aria-hidden="true"><use href="#i-arrow"/></svg></button>
+            <p class="panel-hint">Route discovery, injection workflows and session analysis for your CTF target. Web budgets are cooperative.</p>
+          </form>
         </div>
-      </div>`;
-    } else if (r.type === 'candidate') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-decode">CANDIDATE</span></div>
-        <div class="value"><span class="method">${escHtml(r.source || 'solver')}</span> → ${escHtml(r.value || '')} <small>(confidence ${r.confidence ?? 0})</small>${renderEvidence(r)}${renderSolution(r.solution, true)}</div>
-      </div>`;
-    } else if (r.type === 'decode') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-decode">DECODE</span></div>
-        <div class="value"><span class="score">${r.score}</span><span class="method">${escHtml(r.method)}</span>
-          <pre class="decode-output">${escHtml(r.output || '')}</pre>
-          ${renderEvidence({ ...r, solution: r.explanation, status: 'raw' })}${renderSolution(r.explanation, false)}
-        </div>
-      </div>`;
-    } else if (r.type === 'scan') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-scan">SCAN</span>${r.section ? ' ' + escHtml(r.section) : ''}</div>
-        <div class="value">${escHtml((r.data || '').substring(0, 600))}</div>
-      </div>`;
-    } else if (r.type === 'network') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-net">NET</span>${r.section ? ' ' + escHtml(r.section) : ''}</div>
-        <div class="value">${escHtml((r.data || '').substring(0, 600))}</div>
-      </div>`;
-    } else if (r.type === 'image') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-scan">IMAGE</span> ${escHtml(r.section || '')}</div>
-        <pre class="value" style="white-space:pre-wrap;max-height:420px;overflow:auto">${escHtml((r.data || '').substring(0, 12000))}</pre>
-      </div>`;
-    } else if (r.type === 'target') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-target">TARGET</span></div>
-        <div class="value">${escHtml(r.url || r.path || '')}</div>
-      </div>`;
-    } else if (r.type === 'file') {
-      html += `<div class="r-item">
-        <div class="label"><span class="badge badge-file">FILE</span></div>
-        <div class="value">${escHtml(r.path || '')}</div>
-      </div>`;
-    }
-  }
-
-  body.innerHTML = html || '<div class="empty"><span class="icon">🔍</span>No results found</div>';
-  body.querySelectorAll('.r-item').forEach((item, index) => {
-    item.style.animation = `fadeIn .28s var(--ease-out) ${Math.min(index * 22, 360)}ms both`;
-  });
-
-  // Title
-  if (data.status !== 'cancelled' && !live) {
-    if (flags.length > 0) {
-      title.textContent = `✅ ${flags.length} flag${flags.length > 1 ? 's' : ''} found!`;
-    } else {
-      title.textContent = 'Scan complete — no flags found';
-    }
-  }
-
-  // Summary
-  summary.innerHTML = `
-    <div class="stat stat-flags"><span class="num">${flags.length}</span> Flags</div>
-    <div class="stat stat-decodes"><span class="num">${decodes.length}</span> Decodes</div>
-    <div class="stat stat-warnings"><span class="num">${results.length}</span> Total results</div>
-  `;
-}
-
-function escHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-/* ── Enter key support ─────────────────────────────────────── */
-document.getElementById('web-url').addEventListener('keydown', e => {
-  if (e.key === 'Enter') runScan('web');
-});
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && activeJobId) stopScan();
-});
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchTab(tab.dataset.tab); }
-  });
-});
-</script>
+      </section>
+      <section class="work-panel" aria-labelledby="queue-heading">
+        <div class="panel-top"><h3 id="queue-heading"><svg aria-hidden="true"><use href="#i-layers"/></svg><span id="queue-title">AUTO CTF QUEUE</span><span class="queue-header-count" id="queue-badge">0</span></h3><button class="quiet-button" id="clear-queue">Clear waiting</button></div>
+        <div class="status-line" id="queue-progress" aria-hidden="true"></div>
+        <div class="queue-list" id="queue-list"><div class="empty-queue"><svg aria-hidden="true"><use href="#i-layers"/></svg><h3>The field is clear.</h3><p>Add your first challenge. Every mission and its results will appear here.</p></div></div>
+        <div class="queue-footer"><span id="queue-footer-text">AWAITING YOUR FIRST CHALLENGE</span><span class="signal-bars" aria-hidden="true">▂ ▄ ▆ █</span></div>
+      </section>
+    </div>
+  </section>
+  <section class="toolbox" id="toolbox" aria-labelledby="toolbox-title" hidden><div class="section-index">02 / TOOL ARSENAL</div><h2 id="toolbox-title">Know what is in your toolkit.</h2><p class="toolbox-note">Capabilities detected on the server running this workspace. Optional tools extend the built-in solvers; availability alone does not mean every challenge is supported.</p><div class="tool-grid" id="tool-grid"></div><p class="runtime-profile" id="runtime-profile"></p><div class="help-command">./ctf doctor<br>./ctf --batch ./challenges --jobs 2 --job-seconds 90 --resume</div></section>
+  <section class="evidence-section enter delay-3" id="evidence-section" aria-labelledby="evidence-heading">
+    <div class="evidence-toolbar"><div><div class="section-index">03 / INTELLIGENCE</div><h2 id="evidence-heading">Follow the evidence.</h2></div><div class="evidence-actions"><input class="finding-search" id="finding-search" type="search" placeholder="Search evidence…" aria-label="Search evidence"><div class="filter-tabs" role="group" aria-label="Filter findings"><button class="filter-button active" data-filter="all" aria-pressed="true">All</button><button class="filter-button" data-filter="verified" aria-pressed="false">Verified</button><button class="filter-button" data-filter="candidate" aria-pressed="false">Candidates</button><button class="filter-button" data-filter="decode" aria-pressed="false">Decodes</button></div><button class="quiet-button" id="download-results"><svg aria-hidden="true"><use href="#i-download"/></svg>Export JSON</button></div></div>
+    <div class="evidence-meta" id="evidence-meta" hidden><span id="selected-name"></span><button class="quiet-button error-text" id="stop-job" hidden><svg aria-hidden="true"><use href="#i-stop"/></svg>Stop job</button><span id="selected-status"></span></div>
+    <div id="findings"><div class="evidence-empty"><svg aria-hidden="true"><use href="#i-scan"/></svg><div><h3>Good answers leave a trail.</h3><p>Recovered flags, candidate matches and decode steps will appear here. Select a mission to inspect its results.</p></div></div></div>
+  </section>
+  <footer class="footer"><span id="session-save">SESSION SAVED IN THIS TAB</span><span>LOCAL EVIDENCE ≠ SCOREBOARD ACCEPTANCE</span></footer>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

@@ -18,6 +18,20 @@ from .common import score_candidates, text_score, long_to_bytes
 MAX_CANDIDATES = 25
 
 
+def _flag_hits(text):
+    if isinstance(text, bytes):
+        text = text.decode("latin-1", "replace")
+    # Keep the decoded bytes literal.  The wrapped value below is only an
+    # additional candidate for an explicit, known prefix already in the text.
+    known, cands = flaglib.extract_flags(text)
+    # Some challenges intentionally omit braces in the decoded plaintext
+    # (for example SCRIPTCTFNOTWHATITSEEMS).  The prefix itself is explicit
+    # evidence, so expose the canonical wrapped form alongside the literal
+    # decode instead of losing the answer during flag collection.
+    wrapped = flaglib.wrap_known_prefix(text)
+    return list(dict.fromkeys(known + cands + wrapped))
+
+
 def _rank(candidates):
     """candidates: list of (label, text) or (score, label, text).
     Returns ranked (score, label, text)."""
@@ -37,6 +51,8 @@ def _rank(candidates):
             s = float("inf")
         if s == float("inf"):
             continue
+        if _flag_hits(text):
+            s -= 2000.0
         # gated crib decodes are high-precision — surface them first
         if label.startswith(("xor-crib", "crib")):
             s -= 1000.0
@@ -72,20 +88,6 @@ def _filter_flag_families(flags):
             seen.add(f)
             out.append(f)
     return out
-
-
-def _flag_hits(text):
-    if isinstance(text, bytes):
-        text = text.decode("latin-1", "replace")
-    # Keep the decoded bytes literal.  The wrapped value below is only an
-    # additional candidate for an explicit, known prefix already in the text.
-    known, cands = flaglib.extract_flags(text)
-    # Some challenges intentionally omit braces in the decoded plaintext
-    # (for example SCRIPTCTFNOTWHATITSEEMS).  The prefix itself is explicit
-    # evidence, so expose the canonical wrapped form alongside the literal
-    # decode instead of losing the answer during flag collection.
-    wrapped = flaglib.wrap_known_prefix(text)
-    return list(dict.fromkeys(known + cands + wrapped))
 
 
 def _verified_fast_hits(entries, prefix_hint=None):
@@ -285,11 +287,13 @@ def _nested_payloads(text, max_items=24):
     return output
 
 
-def _nested_payload_job(text):
+def _nested_payload_job(text, context=None):
     results = []
     for path, payload in _nested_payloads(text):
+        if context is not None and context.cancelled:
+            break
         try:
-            sub_ranked, sub_flags = analyze_text(payload)
+            sub_ranked, sub_flags = analyze_text(payload, context=context)
         except Exception:
             continue
         for score, label, output in sub_ranked:
@@ -418,14 +422,24 @@ def _prng_job(text):
     return out
 
 
-def _analyze_text_uncached(text, prefix_hint=None):
+def _analyze_text_uncached(text, prefix_hint=None, context=None):
     """Run every solver; return ranked results and flags found."""
     if not text or not text.strip():
+        return [], []
+    if context is not None and context.cancelled:
         return [], []
     stripped = text.strip()
     direct_flags, _ = flaglib.extract_flags(stripped, include_candidates=False)
     if direct_flags and stripped == direct_flags[0]:
         return [(0.0, "direct", stripped)], direct_flags
+
+    from .fastlane import decode_fast
+    fast_chain = decode_fast(text, prefix=prefix_hint)
+    if fast_chain:
+        entries = [(f"fast-chain({path})", value) for path, value in fast_chain]
+        hits = [flag for _, value in fast_chain for flag in _flag_hits(value)]
+        if hits:
+            return _rank(entries), list(dict.fromkeys(hits))
 
     from .common import looks_like_encoding
 
@@ -489,7 +503,7 @@ def _analyze_text_uncached(text, prefix_hint=None):
         ("explicit-key", lambda: _hinted_classic_results(text)),
         ("structured", lambda: structured_mod.analyze(text,
                                                        prefix_hint=prefix_hint)),
-        ("nested-json", lambda: _nested_payload_job(text)),
+        ("nested-json", lambda: _nested_payload_job(text, context=context)),
         ("hash-crack", lambda: _hash_crack(text)),
         ("rsa-params", lambda: _try_rsa_params(text)),
         ("length-ext", lambda: _length_ext_job(text)),
@@ -506,7 +520,7 @@ def _analyze_text_uncached(text, prefix_hint=None):
     # but waste most of the time on JSON/KDF/parameter artifacts whose
     # structured path is deterministic and independently verifiable.
     if encoded or (not structured_input and not kdf_input and not parameter_input):
-        jobs.append(("chain-decode", lambda: _chain_decode_job(text)))
+        jobs.append(("chain-decode", lambda: _chain_decode_job(text, context=context)))
     # Bacon's cipher is a 5-bit grouping over 0/1 (or A/B) — a binary-
     # looking string is *exactly* its signature, yet looks_like_encoding
     # classifies "100010..." as hex and skips the classic solvers. Run it
@@ -634,12 +648,15 @@ def _analyze_text_cached(text):
     return tuple(ranked), tuple(flags)
 
 
-def analyze_text(text, prefix_hint=None):
+def analyze_text(text, prefix_hint=None, context=None):
     """Cached public wrapper; return fresh lists for compatibility.
 
     Prefix hints are explicit challenge metadata and intentionally bypass the
     text-only cache so they never contaminate a standalone decode.
     """
+    if context is not None:
+        return _analyze_text_uncached(text, prefix_hint=prefix_hint,
+                                      context=context)
     if not isinstance(text, str) or len(text) > 100_000:
         return _analyze_text_uncached(text, prefix_hint=prefix_hint)
     if prefix_hint:
@@ -648,7 +665,7 @@ def analyze_text(text, prefix_hint=None):
     return list(ranked), list(flags)
 
 
-def analyze_text_evidence(text, prefix_hint=None):
+def analyze_text_evidence(text, prefix_hint=None, context=None):
     """Analyze text and return rich findings without changing the legacy API.
 
     ``analyze_text`` remains the compatibility entry point returning
@@ -656,19 +673,24 @@ def analyze_text_evidence(text, prefix_hint=None):
     extractions as verified, heuristic XOR cribs as candidates, and all other
     interesting plaintext as raw decode output.
     """
-    ranked, legacy_flags = analyze_text(text, prefix_hint=prefix_hint)
+    ranked, legacy_flags = analyze_text(text, prefix_hint=prefix_hint,
+                                         context=context)
     ledger = EvidenceLedger()
     observed = set()
 
     def deterministic_label(label):
         """Only a direct, validated decoder can promote a flag to verified."""
         low = str(label).lower().strip()
+        if low.startswith("fast-chain(") and low.endswith(")"):
+            from .fastlane import TRANSPORTS
+            return all(part in TRANSPORTS for part in low[11:-1].split(">"))
         if "->" in low:
             low = low.rsplit("->", 1)[1].strip()
         if low.startswith("chain["):
             return False  # intermediate chain stages are candidates
         if low.startswith("chain-best("):
-            return "xor" not in low
+            from .fastlane import TRANSPORTS
+            return low.endswith(")") and all(part in TRANSPORTS for part in low[11:-1].split(">"))
         return low.split(" ", 1)[0] in {
             "base16", "base32", "base32hex", "base45", "base58", "base64",
             "base62", "base85", "ascii85", "hex", "url", "unicode",
@@ -724,11 +746,34 @@ def _length_ext_job(text):
         return []
 
 
-def _chain_decode_job(text):
-    """Layered-encoding chains, EXPLORING ALL DECODE PATHS (beam search).
-    Multi-layer inputs (base64>hex>rot13>binary...) that greedy decoding
-    misses are recovered here; flags at ANY layer are returned."""
+def _chain_decode_job(text, context=None):
+    """Layered-encoding chains over text *and binary intermediates*.
+
+    The typed graph runs first so compressed/raw-XOR nodes are not discarded
+    merely because they are not printable.  The legacy greedy/beam output is
+    retained as a fallback for compatibility and for free-form transforms.
+    """
     out = []
+    try:
+        from .graph import decode_graph
+        graph = decode_graph(
+            text,
+            max_depth=getattr(context, "max_depth", 12),
+            max_branches=8,
+            max_nodes=getattr(context, "max_nodes", 600) or 600,
+            max_bytes=getattr(context, "max_bytes", 64 * 1024 * 1024) or
+                      64 * 1024 * 1024,
+            timeout=min(12.0, max(0.2, float(getattr(context, "max_seconds", 12)
+                                            or 12))) if context else 12.0,
+            context=context,
+        )
+        typed = graph.results(include_binary=False)
+        for path, cur in typed:
+            out.append((f"chain-best({path})", cur))
+        if graph.flag_hits():
+            return out
+    except Exception:
+        pass
     try:
         for i, (name, cur) in enumerate(encodings.chain_decode(text), 1):
             out.append((f"chain[{i}]={name}", cur))
@@ -739,7 +784,9 @@ def _chain_decode_job(text):
         pass
     try:
         for path, cur in encodings.chain_decode_best(text):
-            out.append((f"chain-best({path})", cur))
+            item = (f"chain-best({path})", cur)
+            if item not in out:
+                out.append(item)
     except Exception:
         pass
     return out

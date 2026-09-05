@@ -67,14 +67,23 @@ def run_crypto(target):
             info_line("hint: " + hint)
         for item in report["repeated"][:100]:
             print(f"  [{item['kind']}] {item['value'][:80]} <- {', '.join(item['sources'])}")
+        flags = []
+        for solution in report.get("solutions", []):
+            info_line(solution["method"] + " <- " + ", ".join(solution["sources"]))
+            print(solution["plaintext"])
+            known, candidates = flaglib.extract_flags(solution["plaintext"])
+            flags.extend(known + candidates)
+        if flags:
+            return list(dict.fromkeys(flags))
         return []
     from modules.crypto.autodetect import run_crypto as _run
     return _run(target)
 
 
-def run_network(target):
+def run_network(target, **kwargs):
     from modules.network.scanner import run_network as _run
-    return _run(target, chain_to_web=run_web)
+    chain = kwargs.pop("chain_to_web", run_web)
+    return _run(target, chain_to_web=chain, **kwargs)
 
 
 def run_service(target):
@@ -497,10 +506,17 @@ def dispatch(args):
 
 def main():
     parser = argparse.ArgumentParser(description="CTF Auto Recon & Solver")
-    parser.add_argument("--category", choices=["web", "crypto", "network", "image", "picture", "pic", "service", "full"],
+    parser.add_argument("--category", choices=["auto", "web", "crypto", "network", "image", "picture", "pic", "service", "full"],
                         help="หมวดที่ต้องการรัน")
     parser.add_argument("--module", help="โมดูลเดี่ยว (เช่น jwt)")
     parser.add_argument("--target", help="URL / host / path ไฟล์ / ข้อความ")
+    parser.add_argument("--batch", metavar="DIRECTORY", help="แกะหลายโจทย์: ไฟล์/โฟลเดอร์ชั้นแรกแต่ละรายการคือหนึ่งโจทย์")
+    parser.add_argument("--jobs", type=int, default=min(4, max(1, (os.cpu_count() or 2) // 2)), help="จำนวนโจทย์พร้อมกัน 1..8 (ปรับตาม CPU สูงสุด 4 โดยอัตโนมัติ)")
+    parser.add_argument("--job-seconds", type=float, default=60, help="เวลาสูงสุดจริงต่อโจทย์ในโหมด auto/batch")
+    parser.add_argument("--output", default="competition-results", help="โฟลเดอร์ผล JSON/Markdown ของ auto/batch")
+    parser.add_argument("--resume", action="store_true", help="ข้ามงานที่เสร็จและ fingerprint ยังตรง")
+    parser.add_argument("--prefix", help="รูปแบบ flag ของสนาม เช่น MyCTF (ไม่เติม wrapper ให้ plaintext)")
+    parser.add_argument("--deep", action="store_true", help="วิเคราะห์ต่อหลังพบผล ในโหมด auto/batch")
     parser.add_argument("--header", action="append", default=[],
                         metavar='"K: V"',
                         help="header เพิ่มทุก request (ใส่ซ้ำได้) — "
@@ -530,6 +546,28 @@ def main():
     parser.add_argument("--callback-url", default=None,
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     args = parser.parse_args()
+
+    if args.batch or args.category == "auto":
+        if args.batch and (args.target or args.category or args.module):
+            parser.error("ใช้ --batch แยกจาก --target/--category/--module")
+        target = args.batch or args.target
+        if not target:
+            parser.error("auto ต้องระบุ --target เป็นไฟล์หรือโฟลเดอร์โจทย์")
+        from core.competition import run_batch
+        try:
+            result = run_batch(target, output=args.output, jobs=args.jobs,
+                               seconds=args.job_seconds, resume=args.resume,
+                               prefix=args.prefix, deep=args.deep,
+                               single=not bool(args.batch))
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        verified = sum(sum(f.get("kind") == "verified" for f in j.get("findings", []))
+                       for j in result["jobs"])
+        print(f"Local verified findings: {verified}; scoreboard acceptance untested")
+        print("Results: " + os.path.abspath(os.path.join(args.output, "results.json")))
+        if any(j["status"] != "completed" for j in result["jobs"]):
+            raise SystemExit(2)
+        return
 
     if args.category == "service" and args.target and ":" not in args.target:
         parser.error("service target ต้องเป็น host:port")
