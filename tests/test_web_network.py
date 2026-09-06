@@ -1,5 +1,6 @@
 import io
 import unittest
+from unittest.mock import patch
 
 from modules.network import nmap
 from modules.web.response_diff import fingerprint
@@ -22,6 +23,16 @@ class WebNetworkTests(unittest.TestCase):
         self.assertIn("Werkzeug", result[8080]["info"])
         self.assertEqual(result[8080]["scripts"][0]["id"], "http-title")
         self.assertNotIn(22, result)
+
+    def test_nmap_top_ports_command_is_well_formed(self):
+        class Completed:
+            stdout = ""
+
+        with patch("modules.network.nmap.subprocess.run", return_value=Completed()) as run:
+            nmap._run_nmap("127.0.0.1", ports=None, fast=True)
+        command = run.call_args.args[0]
+        self.assertIn("--top-ports", command)
+        self.assertNotIn("-p", command)
 
     def test_fingerprint_is_stable_for_dynamic_values(self):
         class Response:

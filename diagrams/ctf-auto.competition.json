@@ -42,7 +42,7 @@
       "id": "isolated-runner",
       "type": "backend",
       "label": "แยก process ต่อโจทย์",
-      "sublabel": "run_isolated() + deadline",
+      "sublabel": "run_isolated() + deadline + tool timeout",
       "pos": [
         350,
         350
@@ -178,7 +178,8 @@
       "title": "ใช้แข่งหลายโจทย์",
       "items": [
         "CLI ข้ามงานเดิมเมื่อ hash ของไฟล์ โค้ด และ dependency ตรงกัน",
-        "หน้าเว็บจัดคิวไฟล์และเก็บประวัติผลในแท็บ พร้อมดาวน์โหลด JSON"
+        "หน้าเว็บจัดคิวไฟล์และเก็บประวัติผลในแท็บ พร้อมดาวน์โหลด JSON",
+        "เรียก external tools แบบ opt-in พร้อม fallback และเก็บ raw evidence"
       ]
     },
     {

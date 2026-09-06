@@ -162,6 +162,10 @@ class CorpusBenchmarkTests(unittest.TestCase):
         self.assertIn("solved", result)
         self.assertIn("solve_rate", result)
         self.assertGreater(result["total"], 0)
+        self.assertEqual(result["solved"], result["total"], result)
+        self.assertEqual(result["failures"], [], result)
+        self.assertIn("p95_time_ms", result)
+        self.assertIn("max_time_ms", result)
 
     def test_rsa_small_e_corpus(self):
         from tests.corpus.generate import generate_rsa_small_e

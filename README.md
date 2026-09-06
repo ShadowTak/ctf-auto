@@ -11,7 +11,49 @@ bash scripts/setup_competition.sh
 ./ctf doctor
 ```
 
+### External recon tools (opt-in)
+
+เครื่องมือภายนอกทั้งหมดเรียกแบบ opt-in ผ่าน bounded adapter ได้โดยไม่ผ่าน shell
+ใช้ argument list, process-group kill, hard timeout และเก็บ raw evidence แยกจากผล solver:
+
+```bash
+python3 run.py --category network --target 10.10.10.5 \
+  --external-tools nmap --nmap-ports 22,80,443,8000-8100 --tool-timeout 45
+
+python3 run.py --category web --target http://10.10.10.5:8080 \
+  --external-tools ffuf --wordlist wordlists/common.txt \
+  --ffuf-threads 64 --tool-timeout 45
+
+python3 run.py --category full --target 10.10.10.5 \
+  --external-tools nmap,ffuf --nmap-ports 80,443,8000-8100
+
+python3 run.py --category web --target http://10.10.10.5:8080 \
+  --external-tools curl,sqlmap --tool-timeout 60
+
+python3 run.py --category crypto --target hashes.txt \
+  --external-tools hashcat,john --wordlist wordlists/passwords.txt --hash-mode 0
+
+python3 run.py --category image --target suspicious.png \
+  --external-tools exiftool,identify,tesseract,zbarimg,zsteg,binwalk,radare2,7zz
+
+python3 run.py --category network --target capture.pcapng \
+  --external-tools tshark --tool-timeout 45
+```
+
+รายการที่เรียกได้: `nmap`, `ffuf`, `tshark`, `curl`, `hashcat`, `john`, `sqlmap`,
+`radare2`, `exiftool`, `tesseract`, `zbarimg`, `zsteg`, `binwalk`, `identify`, `7zz`.
+URL ใช้ `curl`/`sqlmap`, pcap ใช้ `tshark`, ไฟล์ใช้ `radare2`/`7zz`/forensics tools
+และ hash file ใช้ `hashcat`/`john` พร้อม `--wordlist` และ `--hash-mode`.
+`ffuf` จะใช้เป็น directory discovery หลักเมื่อรันสำเร็จ และ fallback กลับไปใช้
+Python DirBuster เมื่อไม่มี binary/wordlist หรือ tool timeout; ทั้งสอง tool ใช้
+ค่าเริ่มต้น `wordlists/common.txt` มาจาก SecLists Web-Content common.txt
+และสามารถเปลี่ยนด้วย `--wordlist`.
+
 Crypto เพิ่มทางด่วน 64 ชั้นและ RSA ข้ามไฟล์/สมาชิก archive ก่อน fallback ที่ซับซ้อน บน M5 10 คอร์ ชุดทดสอบ Base64 8/16/24 ชั้น และ mixed compression 9 ชั้นถอดตรงคำตอบใน **0.16–0.22 วินาที รวม startup** เป็นตัวเลขจาก fixture สังเคราะห์ ไม่ใช่คำรับประกันต่อโจทย์ทุกชนิด Web เพิ่ม early evidence และแก้ตัวเลือก Deep ให้มีผลจริง
+
+`wordlists/common.txt` เป็น SecLists `Discovery/Web-Content/common.txt` จำนวน 4,751 รายการ
+(SHA-256: `47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a`) สำหรับ
+quick directory discovery; source: `https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt`.
 
 อ่าน [คู่มือการแข่งขัน ขอบเขต และแหล่ง writeup](docs/competition-upgrade.md), [ผลวัด M5](docs/performance-m5.json) และ [แผนผังระบบแบบ interactive](diagrams/ctf-auto.competition.html) แยกผล verified / candidate / decode; verified หมายถึงหลักฐานในเครื่อง ยังไม่ได้ส่ง scoreboard
 

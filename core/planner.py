@@ -6,11 +6,21 @@ import shutil
 def capabilities():
     optional = {
         "nmap": shutil.which("nmap"),
+        "ffuf": shutil.which("ffuf"),
+        "curl": shutil.which("curl"),
+        "sqlmap": shutil.which("sqlmap"),
+        "hashcat": shutil.which("hashcat"),
+        "john": shutil.which("john"),
+        "radare2": shutil.which("r2"),
         "file": shutil.which("file"),
         "binwalk": shutil.which("binwalk"),
         "tshark": shutil.which("tshark"),
         "7z": shutil.which("7z") or shutil.which("7zz"),
         "exiftool": shutil.which("exiftool"),
+        "tesseract": shutil.which("tesseract"),
+        "zbarimg": shutil.which("zbarimg"),
+        "zsteg": shutil.which("zsteg"),
+        "identify": shutil.which("identify"),
         "z3": _module("z3"),
         "sympy": _module("sympy"),
         "Pillow": _module("PIL"),
@@ -69,11 +79,25 @@ def plan(target):
             pipelines.append("recursive-container")
         if kind in {"image"}:
             pipelines.append("image-forensics")
+            pipelines.append("optional-image-tools")
         if kind in {"pcap", "pcapng"}:
             pipelines.append("pcap-network")
+            if shutil.which("tshark"):
+                pipelines.append("tshark-json-evidence")
         if kind in {"elf", "pe", "binary"}:
             pipelines.extend(["binary-triage", "embedded-blobs"])
+            if shutil.which("r2"):
+                pipelines.append("radare2-static-summary")
+            if shutil.which("7zz"):
+                pipelines.append("7zz-archive-inventory")
         return {"kind": kind, "pipelines": pipelines}
     if str(target).startswith(("http://", "https://")):
-        return {"kind": "url", "pipelines": ["web-recon", "route-discovery", "targeted-probes"]}
+        pipelines = ["web-recon", "route-discovery", "targeted-probes"]
+        if shutil.which("ffuf"):
+            pipelines.append("ffuf-bounded-directory-discovery")
+        if shutil.which("curl"):
+            pipelines.append("curl-raw-http-evidence")
+        if shutil.which("sqlmap"):
+            pipelines.append("sqlmap-low-risk-opt-in")
+        return {"kind": "url", "pipelines": pipelines}
     return {"kind": "text", "pipelines": ["encoding-chain", "structured-crypto", "classic-and-xor"]}

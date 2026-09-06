@@ -168,6 +168,21 @@ def _decrypt_per_char(text, key):
     return "".join(out)
 
 
+def _decrypt_preserve(text, key):
+    """Decrypt letters-only Vigenere while preserving punctuation/case."""
+    key_l = [ord(c.lower()) - 97 for c in key]
+    out = []
+    ki = 0
+    for ch in text:
+        if ch.isalpha():
+            base = ord("A") if ch.isupper() else ord("a")
+            out.append(chr((ord(ch) - base - key_l[ki % len(key_l)]) % 26 + base))
+            ki += 1
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _key_period(seq):
     """Smallest p >= 1 such that seq repeats with period p."""
     n = len(seq)
@@ -196,6 +211,32 @@ def _recover_vigenere_key(text):
             s = float("inf")
         if best is None or s < best[0]:
             best = (s, len(key), key, dec)
+
+    # CTF plaintexts usually expose a short, exact prefix.  Recovering a
+    # periodic key from that prefix is both more accurate and dramatically
+    # cheaper than launching the full IC/Kasiski sweep first.  Only accept a
+    # candidate when the complete decrypted text contains a real known flag;
+    # this keeps the shortcut from turning arbitrary text into a forced flag.
+    ordered_cribs = ("ctf{", "CTF{", "flag{", "FLAG{") + tuple(_CRIBS)
+    for crib in ordered_cribs:
+        plain_prefix = _norm(crib)
+        if len(letters) < len(plain_prefix):
+            continue
+        derived = [
+            (ord(cipher) - ord(plain)) % 26
+            for cipher, plain in zip(letters, plain_prefix)
+        ]
+        for key_len in range(1, min(12, len(derived)) + 1):
+            if any(value != derived[index % key_len]
+                   for index, value in enumerate(derived)):
+                continue
+            key = "".join(ALPHA[value] for value in derived[:key_len])
+            candidates = (_decrypt_preserve(text, key),
+                          _decrypt_per_char(text, key))
+            for candidate in candidates:
+                known, _ = flaglib.extract_flags(candidate)
+                if known and text_score(candidate) < 65:
+                    return (text_score(candidate), key_len, key, candidate)
 
     # 1) plain key-length sweep (works on longer messages)
     for kl in range(2, min(20, len(letters)) + 1):

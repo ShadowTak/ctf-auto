@@ -5,6 +5,7 @@ Measures solve rate, speed, and false-positive rate across all categories.
 import json
 import os
 import signal
+import statistics
 import sys
 import time
 
@@ -19,6 +20,26 @@ def _timeout_handler(signum, frame):
     raise TimeoutError("Challenge timed out")
 
 
+def _candidate_text(item):
+    """Normalize solver result shapes to plaintext for corpus assertions.
+
+    Most legacy solvers return ``(label, plaintext)`` while ranked classic
+    solvers return ``(score, label, plaintext)``.  The old benchmark treated
+    the label as plaintext for the latter shape and reported false negatives.
+    """
+    if not isinstance(item, (tuple, list)):
+        return str(item)
+    if len(item) >= 3 and isinstance(item[0], (int, float)):
+        value = item[-1]
+    elif len(item) >= 2:
+        value = item[1]
+    else:
+        value = item[-1] if item else ""
+    if isinstance(value, bytes):
+        return value.decode("latin-1", "replace")
+    return str(value)
+
+
 def benchmark_crypto(corpus=None):
     """Benchmark crypto solvers against the corpus."""
     if corpus is None:
@@ -28,7 +49,6 @@ def benchmark_crypto(corpus=None):
     from modules.crypto.autodetect import analyze_text
     from modules.crypto.rsa import crack_rsa
     from modules.crypto.xor import crack_xor
-    from modules.crypto.classic import try_all_classic
 
     results = []
     total = 0
@@ -61,11 +81,9 @@ def benchmark_crypto(corpus=None):
                     n=inputs["n"], e=inputs["e"], c=inputs["c"])
                 for item in results_r:
                     if isinstance(item, (tuple, list)) and len(item) >= 2:
-                        label, pt = item[0], item[1]
-                        if isinstance(pt, bytes):
-                            pt_str = pt.decode("latin-1", "replace")
-                        else:
-                            pt_str = str(pt)
+                        label = item[0]
+                        pt_str = _candidate_text(item)
+                        pt = item[-1]
                         if expected.encode() in pt or expected in pt_str:
                             found_flags.append(expected)
                             method_used = label
@@ -96,11 +114,8 @@ def benchmark_crypto(corpus=None):
                 results_x = crack_xor(ct)
                 for item in results_x:
                     if isinstance(item, (tuple, list)) and len(item) >= 2:
-                        label, pt = item[0], item[1]
-                        if isinstance(pt, bytes):
-                            pt_str = pt.decode("latin-1", "replace")
-                        else:
-                            pt_str = str(pt)
+                        label = item[0]
+                        pt_str = _candidate_text(item)
                         if expected in pt_str:
                             found_flags.append(expected)
                             method_used = label
@@ -117,14 +132,19 @@ def benchmark_crypto(corpus=None):
 
             elif ctype in ("caesar", "vigenere"):
                 ct = inputs["ciphertext"]
-                results_c = try_all_classic(ct)
+                # Benchmark the intended family directly.  Running every
+                # classic solver here measures unrelated substitution/
+                # transposition work and hides the actual hot path.
+                if ctype == "caesar":
+                    from modules.crypto.classic import solve_caesar
+                    results_c = solve_caesar(ct)
+                else:
+                    from modules.crypto.classic import solve_vigenere
+                    results_c = solve_vigenere(ct)
                 for item in results_c:
                     if isinstance(item, (tuple, list)) and len(item) >= 2:
-                        label, pt = item[0], item[1]
-                        if isinstance(pt, str):
-                            pt_str = pt
-                        else:
-                            pt_str = str(pt)
+                        label = item[0]
+                        pt_str = _candidate_text(item)
                         if expected in pt_str:
                             found_flags.append(expected)
                             method_used = label
@@ -161,12 +181,19 @@ def benchmark_crypto(corpus=None):
             "time_ms": round(elapsed * 1000, 1),
         })
 
+    durations = [item["time_ms"] for item in results]
+    failures = [item for item in results if not item["solved"]]
     return {
         "total": total,
         "solved": solved,
         "solve_rate": round(solved / max(total, 1) * 100, 1),
         "total_time_ms": round(total_time * 1000, 1),
         "avg_time_ms": round(total_time * 1000 / max(total, 1), 1),
+        "max_time_ms": max(durations, default=0),
+        "p95_time_ms": round(statistics.quantiles(durations, n=20,
+                                                  method="inclusive")[18], 1)
+        if len(durations) >= 2 else (durations[0] if durations else 0),
+        "failures": [item["type"] for item in failures],
         "details": results,
     }
 
@@ -187,6 +214,8 @@ def run_benchmark():
     print(f"  Solve rate: {crypto_results['solve_rate']}%")
     print(f"  Total time: {crypto_results['total_time_ms']} ms")
     print(f"  Avg time: {crypto_results['avg_time_ms']} ms per challenge")
+    print(f"  P95 time: {crypto_results['p95_time_ms']} ms")
+    print(f"  Max time: {crypto_results['max_time_ms']} ms")
 
     for detail in crypto_results["details"]:
         status = "PASS" if detail["solved"] else "FAIL"

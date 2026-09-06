@@ -257,7 +257,9 @@ def _run_image(jid, filepath):
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-def _run_web_once(jid, url, use_browser=False, prefix_hint=None, deep=True, stop_on_flag=False):
+def _run_web_once(jid, url, use_browser=False, prefix_hint=None, deep=True,
+                  stop_on_flag=False, external_tools=(), external_wordlist=None,
+                  external_timeout=45, external_threads=40):
     try:
         from core.evidence import findings_from_flags
         from modules.web.scanner import run_web
@@ -268,7 +270,11 @@ def _run_web_once(jid, url, use_browser=False, prefix_hint=None, deep=True, stop
                 "source": "web:live response", "evidence": ["Recovered from CTF HTTP response; verify against the challenge"]}
                 for value in flags])
         output = run_web(url, interactive=False, use_browser=use_browser,
-                         deep=deep, on_progress=publish, stop_on_flag=stop_on_flag)
+                         deep=deep, on_progress=publish, stop_on_flag=stop_on_flag,
+                         external_tools=external_tools,
+                         external_wordlist=external_wordlist,
+                         external_timeout=external_timeout,
+                         external_threads=external_threads)
         if isinstance(output, dict):
             for k, v in output.items():
                 results.append({"type": "scan", "section": k,
@@ -298,7 +304,9 @@ def _run_web_once(jid, url, use_browser=False, prefix_hint=None, deep=True, stop
 
 
 def _run_web(jid, url, use_browser=False, deep=True,
-             max_seconds=0, max_requests=0, prefix_hint=None, stop_on_flag=False):
+             max_seconds=0, max_requests=0, prefix_hint=None, stop_on_flag=False,
+             external_tools=(), external_wordlist=None, external_timeout=45,
+             external_threads=40):
     """Run one web job with an isolated process-local HTTP session.
 
     The solver modules intentionally share cookies and learned auth headers
@@ -315,7 +323,12 @@ def _run_web(jid, url, use_browser=False, deep=True,
         set_event(_jobs[jid]["cancel"])
         try:
             _run_web_once(jid, url, use_browser=use_browser,
-                          prefix_hint=prefix_hint, deep=deep, stop_on_flag=stop_on_flag)
+                          prefix_hint=prefix_hint, deep=deep,
+                          stop_on_flag=stop_on_flag,
+                          external_tools=external_tools,
+                          external_wordlist=external_wordlist,
+                          external_timeout=external_timeout,
+                          external_threads=external_threads)
         finally:
             clear_event()
             budget.clear()
@@ -615,15 +628,22 @@ def api_scan():
         try:
             max_seconds = max(0, int(data.get("max_seconds", 0) or 0))
             max_requests = max(0, int(data.get("max_requests", 0) or 0))
+            external_timeout = max(1, min(600, int(data.get("tool_timeout", 45) or 45)))
+            external_threads = max(1, min(128, int(data.get("ffuf_threads", 40) or 40)))
         except (TypeError, ValueError):
             max_seconds, max_requests = 0, 0
+            external_timeout, external_threads = 45, 40
         t = threading.Thread(target=_run_web, args=(jid, url),
                              kwargs={"use_browser": bool(data.get("browser")),
                                      "deep": bool(data.get("deep", True)),
                                      "max_seconds": max_seconds,
                                      "max_requests": max_requests,
                                      "stop_on_flag": bool(data.get("stop_on_flag", False)),
-                                     "prefix_hint": prefix_hint or None}, daemon=True)
+                                     "prefix_hint": prefix_hint or None,
+                                     "external_tools": data.get("external_tools", ()),
+                                     "external_wordlist": data.get("wordlist"),
+                                     "external_timeout": external_timeout,
+                                     "external_threads": external_threads}, daemon=True)
         t.start()
 
     elif category == "network":

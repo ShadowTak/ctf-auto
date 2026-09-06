@@ -4,6 +4,7 @@ error trigger, backups, injection fuzz, login brute, cookies) run CONCURRENTLY
 after dirbust — each is internally threaded already, so wall time drops from
 the sum of phases to the slowest phase."""
 from core import httpx
+from core import external_tools as external_tools_mod
 from core.evidence import findings_from_flags
 from .route_graph import AttackGraph, record_response, probe_authenticated
 from core.flag import extract_flags
@@ -89,7 +90,8 @@ def _unique_urls(base, values, limit=100):
 
 def run_web(target, interactive=False, use_browser=False, reset_session=True,
             deep=True, mode="active", context=None, graph=None, on_progress=None,
-            stop_on_flag=False):
+            stop_on_flag=False, external_tools=(), external_wordlist=None,
+            external_timeout=45, external_threads=40):
     """Public entry. target = URL. Returns list of flags found.
 
     A scan owns its cookie/auth state by default. This prevents a batch
@@ -108,6 +110,9 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True,
     base = httpx.normalize_url(target)
     info_line(f"target: {base}")
     flags = []
+    tool_names = external_tools_mod.normalize_tools(external_tools)
+    if context is not None:
+        context.metadata["external_tools_requested"] = list(tool_names)
 
     def publish():
         if on_progress:
@@ -121,6 +126,30 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True,
     flags.extend(_record(graph, base + "/", probe, tags=("entrypoint",)))
     ok_line(f"เชื่อมต่อได้ (HTTP {probe.status})")
     flags.extend(_response_flags(probe))
+    # curl is a raw HTTP evidence path; sqlmap is deliberately opt-in and
+    # constrained to low level/risk by the adapter.  Neither changes the
+    # normal fast scanner unless explicitly requested.
+    for tool_name in ("curl", "sqlmap"):
+        if tool_name not in tool_names:
+            continue
+        tool_report = external_tools_mod.run_external_tool(
+            tool_name, base, timeout=external_timeout,
+            threads=min(external_threads, 16))
+        if context is not None:
+            context.metadata[tool_name] = {
+                key: value for key, value in tool_report.items()
+                if key not in {"stdout", "stderr", "raw_output", "raw_json"}
+            }
+            context.event("tool", f"{tool_name} finished",
+                          status=tool_report.get("status"),
+                          elapsed_ms=tool_report.get("elapsed_ms", 0))
+        raw = tool_report.get("raw_output") or tool_report.get("stdout", "")
+        found_flags, _ = extract_flags(str(raw))
+        flags.extend(found_flags)
+        if tool_report.get("status") == "completed":
+            ok_line(f"{tool_name} เสร็จแล้ว ({tool_report.get('elapsed_ms', 0)} ms)")
+        else:
+            warn_line(f"{tool_name} ใช้ไม่ได้: {tool_report.get('stderr', tool_report.get('status'))}")
     if publish():
         return list(dict.fromkeys(flags))
     passive_inventory = parameter_inventory.inventory(
@@ -182,8 +211,30 @@ def run_web(target, interactive=False, use_browser=False, reset_session=True,
     # 3) directory brute force
     print()
     print("── Directory brute force ──")
-    buster = dirs_mod.DirBuster(base)
-    found = buster.run(extra_paths=extra_paths)
+    found = []
+    external_done = False
+    if "ffuf" in tool_names:
+        ffuf_report = external_tools_mod.run_ffuf(
+            base, wordlist=external_wordlist, timeout=external_timeout,
+            threads=external_threads)
+        if context is not None:
+            context.metadata["ffuf"] = {
+                key: value for key, value in ffuf_report.items()
+                if key not in {"raw_json", "stdout", "stderr"}
+            }
+            context.event("tool", "ffuf finished",
+                          status=ffuf_report.get("status"),
+                          hits=len(ffuf_report.get("hits", [])),
+                          elapsed_ms=ffuf_report.get("elapsed_ms", 0))
+        if ffuf_report.get("status") == "completed":
+            external_done = True
+            found = external_tools_mod.ffuf_dir_results(ffuf_report)
+            ok_line(f"ffuf พบ {len(found)} path")
+        else:
+            warn_line("ffuf ใช้ไม่ได้ — fallback เป็น Python directory brute force")
+    if not external_done:
+        buster = dirs_mod.DirBuster(base)
+        found = buster.run(extra_paths=extra_paths)
     if found:
         ok_line(f"พบ {len(found)} path น่าสนใจ:")
         for line in dirs_mod.format_results(found):

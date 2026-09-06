@@ -127,6 +127,10 @@ for _prefix in flaglib.known_prefixes():
     _SEEN_PREFIXES.add(_prefix_key)
     FLAG_PREFIXES.append((_prefix + "{").encode())
 
+_EXHAUSTIVE_CRIB_PREFIXES = {
+    "ctf{", "flag{", "picocTF{".lower(), "htb{", "ductf{",
+}
+
 
 def _refine_key(data, key, score_fn, rounds=3):
     """Coordinate-descent per-byte refinement; a cheap first pass."""
@@ -294,7 +298,13 @@ def crib_attack(data, prefixes=None):
     explicit_prefixes = prefixes is not None
     selected_prefixes = []
     seen_prefixes = set()
-    for prefix in (prefixes or FLAG_PREFIXES):
+    ordered_prefixes = prefixes
+    if ordered_prefixes is None:
+        # Put the common CTF spellings first.  A clean hit can return early,
+        # which keeps ordinary ctf{...} fixtures out of the long vocabulary
+        # sweep while preserving the full fallback list for harder events.
+        ordered_prefixes = (b"ctf{", b"CTF{", b"flag{", b"FLAG{") + tuple(FLAG_PREFIXES)
+    for prefix in ordered_prefixes:
         prefix = prefix.encode() if isinstance(prefix, str) else bytes(prefix)
         prefix_key = prefix
         if prefix_key not in seen_prefixes:
@@ -330,16 +340,21 @@ def crib_attack(data, prefixes=None):
             if _assemble(data[:len(prefix)], key) != prefix:
                 continue
             trial_keys = [(key, explicit_prefixes and ks <= len(prefix))]
-            # A one-byte unknown tail is cheap to exhaust and matters for
-            # short real keys (for example a 6-byte key with a 5-byte
-            # ``flag{`` crib). Frequency analysis alone can pick the wrong
-            # byte when a column is very short.
-            if ks > know and ks - know == 1:
-                unknown_pos = know
+            # A one- or two-byte unknown tail is still cheap to exhaust and
+            # matters for short real keys.  For example, ``ctf{`` fixes four
+            # bytes of a six-byte SECRET key; column frequency alone cannot
+            # reliably recover the final two bytes from a short challenge.
+            # Keep this bounded: three unknown bytes would be 16M trials per
+            # crib and belongs in an explicit key-length/wordlist workflow.
+            unknown_count = ks - know
+            prefix_name = prefix.decode("latin-1", "ignore").lower()
+            allow_unknown_tail = explicit_prefixes or prefix_name in _EXHAUSTIVE_CRIB_PREFIXES
+            if 0 < unknown_count <= 2 and len(data) <= 4096 and allow_unknown_tail:
                 trial_keys = []
-                for value in range(256):
+                for values in itertools.product(range(256), repeat=unknown_count):
                     trial = key.copy()
-                    trial[unknown_pos] = value
+                    for offset, value in enumerate(values):
+                        trial[know + offset] = value
                     trial_keys.append((trial, False))
 
             for trial_key, verified in trial_keys:
@@ -353,6 +368,8 @@ def crib_attack(data, prefixes=None):
                 s = text_score(text)
                 if s == float("inf") or s >= 80 or _junk_body(text):
                     continue
+                if flaglib._body_ratio(text) < 0.85 or flaglib._has_code_artifacts(text):
+                    continue
                 # family guard: the SAME body re-wrapped under many
                 # different prefixes is the signature of a blind sweep on
                 # non-XOR data — keep only the first representative
@@ -365,9 +382,13 @@ def crib_attack(data, prefixes=None):
                     continue
                 seen_bodies[body_key] = prefix
                 mode = "verified" if verified else "heuristic"
-                out.append((verified, s,
-                            f"crib-{mode} keylen={ks} key={bytes(trial_key)!r}",
-                            text))
+                label = f"crib-{mode} keylen={ks} key={bytes(trial_key)!r}"
+                # A complete, clean flag with a strong English score is a
+                # decisive crib result. Return immediately instead of
+                # scanning every remaining prefix/key tail combination.
+                if flaglib._body_ratio(text) >= 0.98 and s < 40:
+                    return [(label, text)]
+                out.append((verified, s, label, text))
     # The returned text is the raw plaintext, so rank by the full plaintext
     # score while keeping verified key-period matches first.
     def _sort_key(item):
@@ -679,8 +700,19 @@ def crack_xor(data, known_plaintext=None, prefixes=None):
     data = _to_bytes(data)
     if not data:
         return out
-    # crib first: flag-prefix XOR is the most common CTF pattern and it is
-    # both fast and exact, so a hit can skip the expensive anneal
+    # A direct single-byte pass is cheaper than crib/key-length recovery. If
+    # it already produces a clean flag, return immediately and avoid paying
+    # for the repeating-key search on the common one-byte challenge shape.
+    single = single_byte_xor(data, top=5)
+    for label, plain in single:
+        known, _ = flaglib.extract_flags(plain)
+        if known and all(ch.isalnum() or ch in "{}_-" for ch in known[0]):
+            out.extend(("xor-single " + item_label, item_plain)
+                       for item_label, item_plain in single)
+            return out
+
+    # crib first for non-single-byte inputs: flag-prefix XOR is the most
+    # common CTF pattern and a clean hit can skip the expensive anneal
     try:
         cribs = crib_attack(data, prefixes=prefixes)
     except Exception:
@@ -691,7 +723,7 @@ def crack_xor(data, known_plaintext=None, prefixes=None):
         text_score(plain) < 60 for _, plain in cribs
     ) if cribs else False
 
-    cands = single_byte_xor(data, top=5)
+    cands = single
     for label, plain in cands:
         out.append(("xor-single " + label, plain))
     if not crib_hit:

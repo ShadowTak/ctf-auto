@@ -5072,15 +5072,15 @@
         <text data-detail="context" x="150" y="568" class="t-muted" font-size="9" text-anchor="middle">/api/upload?competition=1</text>
         </g>
 
-        <g id="node-isolated-runner" data-node-id="isolated-runner" data-node-label="แยก process ต่อโจทย์" tabindex="0" role="button" aria-label="Focus แยก process ต่อโจทย์, run_isolated() + deadline, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="run_isolated() + deadline" data-node-context="Architecture component">
-          <title>แยก process ต่อโจทย์ · run_isolated() + deadline · Architecture component</title>
+        <g id="node-isolated-runner" data-node-id="isolated-runner" data-node-label="แยก process ต่อโจทย์" tabindex="0" role="button" aria-label="Focus แยก process ต่อโจทย์, run_isolated() + deadline + tool timeout, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="run_isolated() + deadline + tool timeout" data-node-context="Architecture component">
+          <title>แยก process ต่อโจทย์ · run_isolated() + deadline + tool timeout · Architecture component</title>
           <rect x="350" y="350" width="230" height="86" rx="6" class="c-mask"/>
           <rect x="350" y="350" width="230" height="86" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(356 356) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="465" y="391" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">แยก process ต่อโจทย์</text>
-        <text data-detail="context" x="465" y="407" class="t-muted" font-size="9" text-anchor="middle">run_isolated() + deadline</text>
+        <text data-detail="context" x="465" y="407" class="t-muted" font-size="9" text-anchor="middle">run_isolated() + deadline + tool timeout</text>
         </g>
 
         <g id="node-archive-pipeline" data-node-id="archive-pipeline" data-node-label="ไฟล์และ archive" tabindex="0" role="button" aria-label="Focus ไฟล์และ archive, ZIP / TAR / compression, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="ZIP / TAR / compression" data-node-context="Architecture component">
@@ -5369,6 +5369,7 @@
         <ul>
           <li>&bull; CLI ข้ามงานเดิมเมื่อ hash ของไฟล์ โค้ด และ dependency ตรงกัน</li>
           <li>&bull; หน้าเว็บจัดคิวไฟล์และเก็บประวัติผลในแท็บ พร้อมดาวน์โหลด JSON</li>
+          <li>&bull; เรียก external tools แบบ opt-in พร้อม fallback และเก็บ raw evidence</li>
         </ul>
       </div>
 

@@ -129,16 +129,15 @@ def generate_rsa_common_modulus():
     """RSA with same n, two different exponents."""
     flag = b"ctf{common_modulus_leak}"
     m = int.from_bytes(flag, "big")
-    n, e1 = None, None
+    n, e1, phi = None, 17, None
     while True:
-        p = random.getrandbits(256) | 1
-        q = random.getrandbits(256) | 1
-        n = p * q
-        e1, e2 = 17, 65537
-        if math.gcd(e1, e2) == 1 and n > m:
-            phi = (p - 1) * (q - 1)
-            if math.gcd(e1, phi) == 1 and math.gcd(e2, phi) == 1:
-                break
+        # Use the same proper-prime generator as the other RSA fixtures.
+        # Random odd integers can make c1/c2 non-invertible modulo n and
+        # turn a valid common-modulus challenge into a broken benchmark.
+        n, _, _, _, _, phi = _gen_rsa(e1, bits=512)
+        e2 = 65537
+        if n > m and math.gcd(e2, phi) == 1:
+            break
     c1 = pow(m, e1, n)
     c2 = pow(m, e2, n)
     return {

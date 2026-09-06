@@ -5,6 +5,7 @@ import os
 import re
 
 from core import httpx
+from core import external_tools as external_tools_mod
 from core.flag import extract_flags
 from core.output import info_line, ok_line, section, warn_line
 from . import dns as dns_mod
@@ -26,13 +27,15 @@ def _is_pcap(path):
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
 
-def run_network(target, chain_to_web=None, interactive=False):
+def run_network(target, chain_to_web=None, interactive=False,
+                external_tools=(), nmap_ports=None, external_timeout=45):
     """Public entry. chain_to_web: callable(url) invoked for found web services."""
     section("🌍 NETWORK RECON")
     info_line(f"target: {target}")
+    tool_names = external_tools_mod.normalize_tools(external_tools)
 
     if _is_pcap(target):
-        return _analyze_pcap(target)
+        return _analyze_pcap(target, tool_names, external_timeout)
 
     if not _is_ip(target) and not re.match(r"^[a-zA-Z0-9.\-]+$", target):
         warn_line("เป้าหมายดูไม่ใช่ host/IP — ถ้าเป็นไฟล์ pcap ควรลงท้าย .pcap/.pcapng")
@@ -41,11 +44,22 @@ def run_network(target, chain_to_web=None, interactive=False):
     flags_found = []
     host = target
     indicators = {"links": [], "secrets": [], "ips": [], "decoded_blobs": []}
-
     # 1) port scan
     print()
     info_line("ขั้น 1: สแกนพอร์ต ...")
-    results = nmap_mod.scan_host(host)
+    if "nmap" in tool_names:
+        nmap_report = external_tools_mod.run_nmap(
+            host, ports=nmap_ports, service=True, timeout=external_timeout)
+        results = nmap_report.get("services", {})
+        if nmap_report.get("status") == "completed":
+            info_line("nmap XML evidence: " +
+                      f"{len(nmap_report.get('hosts', []))} host(s), " +
+                      f"{nmap_report.get('elapsed_ms', 0)} ms")
+        else:
+            warn_line("nmap external ใช้ไม่ได้ — fallback เป็น scanner ในตัว")
+            results = nmap_mod.scan_host(host, ports=nmap_ports)
+    else:
+        results = nmap_mod.scan_host(host, ports=nmap_ports)
     if not results:
         warn_line("ไม่พบพอร์ตเปิด (หรือ host ไม่ออนไลน์)")
         return []
@@ -139,7 +153,7 @@ def run_network(target, chain_to_web=None, interactive=False):
     return list(dict.fromkeys(flags_found))
 
 
-def _analyze_pcap(path):
+def _analyze_pcap(path, tool_names=(), external_timeout=45):
     info_line("วิเคราะห์ไฟล์ pcap/pcapng ...")
     info = pcap_mod.analyze_pcap(path)
     for line in pcap_mod.format_pcap_report(info):
@@ -164,6 +178,17 @@ def _analyze_pcap(path):
     for item in indicators["decoded_blobs"][:20]:
         print(f"  [decoded blob] {item['decoded'][:180]}")
     flags = info["flags"]
+    if "tshark" in tool_names:
+        report = external_tools_mod.run_external_tool(
+            "tshark", path, timeout=external_timeout)
+        if report.get("status") == "completed":
+            ok_line(f"tshark JSON evidence: {len(report.get('packets', []))} packets "
+                    f"({report.get('elapsed_ms', 0)} ms)")
+        else:
+            warn_line(f"tshark ใช้ไม่ได้: {report.get('stderr', report.get('status'))}")
+        raw = report.get("raw_json") or report.get("stdout", "")
+        extra_flags, _ = extract_flags(str(raw))
+        flags.extend(extra_flags)
     if flags:
         ok_line("FLAG ที่พบใน traffic:")
         for f in flags:

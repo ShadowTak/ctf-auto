@@ -30,7 +30,7 @@ from web_app import app
 results = {"crypto": [], "web": [], "image": [], "network": []}
 
 
-def test(name, category, passed):
+def record_result(name, category, passed):
     results[category].append((name, passed))
     icon = "✅" if passed else "❌"
     print(f"  {icon} {name}")
@@ -55,7 +55,7 @@ for enc in [base64.b64encode, base64.b64encode, base64.b32encode]:
 d = codecs.encode(d.decode(), "rot_13").encode()
 d = base64.b64encode(d.hex().encode())
 best = chain_decode_best(d.decode(), max_depth=12, max_branches=20, timeout=15.0)
-test("6-layer encoding", "crypto", any("CTF{" in str(o) for _, o in best))
+record_result("6-layer encoding", "crypto", any("CTF{" in str(o) for _, o in best))
 
 # 2. RSA small e
 print("\n▸ RSA small e (e=3, m^e < n)")
@@ -67,7 +67,7 @@ while True:
     if n2 > m2 ** 3 and math.gcd(n2, m2) == 1:
         break
 r2 = crack_rsa(n=n2, e=3, c=pow(m2, 3, n2))
-test("RSA small e", "crypto", any(flag2.decode() in pt.decode("latin-1", "replace") for _, pt in r2))
+record_result("RSA small e", "crypto", any(flag2.decode() in pt.decode("latin-1", "replace") for _, pt in r2))
 
 # 3. RSA Fermat
 print("\n▸ RSA Fermat (close p,q)")
@@ -108,7 +108,7 @@ p3 = _next_prime(random.getrandbits(256))
 q3 = _next_prime(p3 + random.randint(1, 50) * 2)
 n3 = p3 * q3
 r3 = crack_rsa(n=n3, e=65537, c=pow(m3, 65537, n3))
-test("RSA Fermat", "crypto", len(r3) > 0 and any(b"CTF" in pt for _, pt in r3 if isinstance(pt, bytes)))
+record_result("RSA Fermat", "crypto", len(r3) > 0 and any(b"CTF" in pt for _, pt in r3 if isinstance(pt, bytes)))
 
 # 4. XOR single byte
 print("\n▸ XOR single byte")
@@ -116,14 +116,14 @@ flag4 = b"CTF{xor_cracked}"
 k4 = random.randint(1, 255)
 ct4 = bytes(b ^ k4 for b in flag4)
 r4 = crack_xor(ct4)
-test("XOR single byte", "crypto", len(r4) > 0)
+record_result("XOR single byte", "crypto", len(r4) > 0)
 
 # 5. Caesar ROT13
 print("\n▸ Caesar ROT13")
 flag5 = "CTF{caesar_cipher}"
 ct5 = codecs.encode(flag5, "rot_13")
 r5 = try_all_classic(ct5)
-test("Caesar ROT13", "crypto", len(r5) > 0)
+record_result("Caesar ROT13", "crypto", len(r5) > 0)
 
 # 6. RSA broadcast
 print("\n▸ RSA broadcast (e=3, 3 moduli)")
@@ -140,7 +140,7 @@ for _ in range(3):
     ns6.append(n6)
     pairs6.append((n6, 3, pow(m6, 3, n6)))
 dec6 = hastad_broadcast(pairs6)
-test("RSA broadcast", "crypto", dec6 is not None and dec6.to_bytes((dec6.bit_length() + 7) // 8, "big") == flag6)
+record_result("RSA broadcast", "crypto", dec6 is not None and dec6.to_bytes((dec6.bit_length() + 7) // 8, "big") == flag6)
 
 # 7. RSA common modulus
 print("\n▸ RSA common modulus")
@@ -155,13 +155,13 @@ while True:
         if c1_7 > 0 and c2_7 > 0 and math.gcd(c1_7, n7) == 1 and math.gcd(c2_7, n7) == 1:
             break
 dec7 = common_modulus(c1_7, c2_7, 17, 65537, n7)
-test("RSA common modulus", "crypto", dec7 is not None and dec7.to_bytes((dec7.bit_length() + 7) // 8, "big") == flag7)
+record_result("RSA common modulus", "crypto", dec7 is not None and dec7.to_bytes((dec7.bit_length() + 7) // 8, "big") == flag7)
 
 # 8. MD5 hash
 print("\n▸ MD5 hash crack")
 d8 = hashlib.md5(b"password123").hexdigest()
 c8 = crack_hash(d8)
-test("MD5 hash crack", "crypto", c8 is not None and "password123" in c8)
+record_result("MD5 hash crack", "crypto", c8 is not None and "password123" in c8)
 
 # 9. ECDSA nonce reuse
 print("\n▸ ECDSA nonce reuse")
@@ -171,22 +171,22 @@ r9 = 50000
 s1 = ((1000 + d9 * r9) * invmod(k9, n9)) % n9
 s2 = ((2000 + d9 * r9) * invmod(k9, n9)) % n9
 reuse = detect_nonce_reuse([{"r": r9, "s": s1, "z": 1000}, {"r": r9, "s": s2, "z": 2000}])
-test("ECDSA nonce reuse", "crypto", len(reuse) == 1 and reuse[0]["private_key"] == d9)
+record_result("ECDSA nonce reuse", "crypto", len(reuse) == 1 and reuse[0]["private_key"] == d9)
 
 # 10. Coppersmith
 print("\n▸ Coppersmith small roots")
 roots = coppersmith_small_roots(101, 50, lambda _: [(-5) % 101, 1])
-test("Coppersmith", "crypto", 5 in roots)
+record_result("Coppersmith", "crypto", 5 in roots)
 
 # 11. Lattice backends
 print("\n▸ Lattice backends (Z3/fpylll/SymPy)")
 backends = available_backends()
-test("Lattice backends", "crypto", any(backends.values()))
+record_result("Lattice backends", "crypto", any(backends.values()))
 
 # 12. Direct flag
 print("\n▸ Direct flag detection")
 r12, f12 = analyze_text("CTF{direct_flag}")
-test("Direct flag", "crypto", "CTF{direct_flag}" in f12)
+record_result("Direct flag", "crypto", "CTF{direct_flag}" in f12)
 
 # ─── WEB ──────────────────────────────────────────────────────
 print("\n┌──────────────────────────────────────┐")
@@ -198,7 +198,7 @@ with app.test_client() as client:
     print("\n▸ Web scan API (invalid target)")
     resp = client.post("/api/scan", json={"category": "web", "url": ""})
     d13 = resp.get_json()
-    test("Web scan API (empty URL)", "web", "error" in d13 or d13.get("job_id"))
+    record_result("Web scan API (empty URL)", "web", "error" in d13 or d13.get("job_id"))
 
     # 14. Crypto scan API
     print("\n▸ Crypto scan API (text input)")
@@ -212,9 +212,9 @@ with app.test_client() as client:
             if s14["status"] in ("done", "error"):
                 break
         flags14 = [r for r in s14["results"] if r.get("type") == "flag"]
-        test("Crypto scan API", "web", any("CTF{web}" in r.get("flag", "") for r in flags14))
+        record_result("Crypto scan API", "web", any("CTF{web}" in r.get("flag", "") for r in flags14))
     else:
-        test("Crypto scan API", "web", False)
+        record_result("Crypto scan API", "web", False)
 
     # 15. Upload API
     print("\n▸ Upload API")
@@ -224,7 +224,7 @@ with app.test_client() as client:
     with open(tmp15, "rb") as f:
         resp = client.post("/api/upload", data={"file": (f, "flag.txt")}, content_type="multipart/form-data")
     d15 = resp.get_json()
-    test("Upload API", "web", "job_id" in d15 or "file_path" in d15)
+    record_result("Upload API", "web", "job_id" in d15 or "file_path" in d15)
     os.unlink(tmp15)
 
     # 16. Evidence API
@@ -240,21 +240,21 @@ with app.test_client() as client:
                 break
         resp16 = client.get(f"/api/evidence/{jid16}")
         ev16 = resp16.get_json()
-        test("Evidence API", "web", "summary" in ev16 and "flags" in ev16)
+        record_result("Evidence API", "web", "summary" in ev16 and "flags" in ev16)
     else:
-        test("Evidence API", "web", False)
+        record_result("Evidence API", "web", False)
 
     # 17. Stop API
     print("\n▸ Stop API")
     resp = client.post("/api/stop/nonexistent")
     d17 = resp.get_json()
-    test("Stop API (invalid job)", "web", "error" in d17)
+    record_result("Stop API (invalid job)", "web", "error" in d17)
 
     # 18. Prefix hint
     print("\n▸ Prefix hint (ctf = ctf{)")
     resp = client.post("/api/scan", json={"category": "crypto", "text": "dGVzdA==", "prefix": "ctf"})
     d18 = resp.get_json()
-    test("Prefix hint API", "web", "job_id" in d18)
+    record_result("Prefix hint API", "web", "job_id" in d18)
 
 # ─── IMAGE ────────────────────────────────────────────────────
 print("\n┌──────────────────────────────────────┐")
@@ -283,9 +283,9 @@ tmp19 = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
 tmp19.write(make_png())
 tmp19.close()
 report19 = analyze_image(tmp19.name, run_tools=False)
-test("PNG format detection", "image", report19["format"] == "PNG")
-test("PNG metadata", "image", len(report19["metadata"]) > 0)
-test("PNG findings", "image", isinstance(report19["findings"], list))
+record_result("PNG format detection", "image", report19["format"] == "PNG")
+record_result("PNG metadata", "image", len(report19["metadata"]) > 0)
+record_result("PNG findings", "image", isinstance(report19["findings"], list))
 os.unlink(tmp19.name)
 
 # 20. JPEG analysis
@@ -303,17 +303,17 @@ jpeg_data += b"\xff\xd9"
 tmp20.write(jpeg_data)
 tmp20.close()
 report20 = analyze_image(tmp20.name, run_tools=False)
-test("JPEG format detection", "image", report20["format"] == "JPEG")
-test("JPEG metadata", "image", isinstance(report20["metadata"], list))
+record_result("JPEG format detection", "image", report20["format"] == "JPEG")
+record_result("JPEG metadata", "image", isinstance(report20["metadata"], list))
 os.unlink(tmp20.name)
 
 # 21. String extraction
 print("\n▸ String extraction")
-test("String extraction", "image", "ascii" in report20.get("strings", {}) or len(report20.get("strings", {})) > 0)
+record_result("String extraction", "image", "ascii" in report20.get("strings", {}) or len(report20.get("strings", {})) > 0)
 
 # 22. Embedded signatures
 print("\n▸ Embedded signature detection")
-test("Signature detection", "image", isinstance(report20.get("signatures", []), list))
+record_result("Signature detection", "image", isinstance(report20.get("signatures", []), list))
 
 # ─── NETWORK ──────────────────────────────────────────────────
 print("\n┌──────────────────────────────────────┐")
@@ -324,31 +324,31 @@ print("└───────────────────────�
 print("\n▸ Suspicious link extraction")
 text23 = 'http://target/admin/config?debug=1 http://target/.env http://normal/about'
 links = extract_indicators(text23)
-test("Link extraction", "network", len(links["links"]) > 0)
+record_result("Link extraction", "network", len(links["links"]) > 0)
 
 # 24. Score ranking
 print("\n▸ Link score ranking")
 top = sorted(links["links"], key=lambda x: -x["score"])
-test("Score ranking", "network", top[0]["score"] >= top[-1]["score"])
+record_result("Score ranking", "network", top[0]["score"] >= top[-1]["score"])
 
 # 25. Flag extraction
 print("\n▸ Flag extraction from text")
 links25 = extract_indicators("http://x ctf{net_flag_found} 192.168.1.1")
-test("Flag extraction", "network", "ctf{net_flag_found}" in links25["flags"])
+record_result("Flag extraction", "network", "ctf{net_flag_found}" in links25["flags"])
 
 # 26. IP extraction
 print("\n▸ IP extraction")
-test("IP extraction", "network", "192.168.1.1" in links25["ips"])
+record_result("IP extraction", "network", "192.168.1.1" in links25["ips"])
 
 # 27. Secret detection
 print("\n▸ Secret/credential detection")
 links27 = extract_indicators("Authorization: Bearer secret_token_abc123 api_key=xyz789")
-test("Secret detection", "network", len(links27["secrets"]) > 0)
+record_result("Secret detection", "network", len(links27["secrets"]) > 0)
 
 # 28. Base64 blob decode
 print("\n▸ Base64 blob decode")
 links28 = extract_indicators("SGVsbG8gd29ybGQ=")
-test("Base64 blob decode", "network", any("Hello" in b.get("decoded", "") for b in links28["decoded_blobs"]))
+record_result("Base64 blob decode", "network", any("Hello" in b.get("decoded", "") for b in links28["decoded_blobs"]))
 
 
 # ═══════════════════════════════════════════════════════════════

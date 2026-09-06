@@ -43,13 +43,17 @@ SERVICE_GUESS = {
 
 def _run_nmap(host, ports=None, fast=True):
     """Run nmap; returns dict: {port: {service, version, banner, extra}}."""
+    cmd = ["nmap", "-Pn", "-T4", "--open"]
     if ports:
         port_arg = ",".join(str(p) for p in ports)
+        cmd.extend(("-p", port_arg))
     else:
-        port_arg = "--top-ports 1000"
-    cmd = ["nmap", "-Pn", "-T4", "-sV", "--open", "-p", port_arg, host]
+        cmd.extend(("--top-ports", "1000"))
     if fast:
-        cmd = ["nmap", "-Pn", "-T4", "--open", "-p", port_arg, host]
+        pass
+    else:
+        cmd.insert(4, "-sV")
+    cmd.append(host)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except (subprocess.TimeoutExpired, FileNotFoundError):

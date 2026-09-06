@@ -56,8 +56,47 @@ def run_web(target, prefix_hint=None, **kwargs):
     return _run(target, **kwargs)
 
 
-def run_crypto(target):
+def _run_external_file_tools(target, tool_names, *, wordlist=None, timeout=45,
+                             hash_mode=0, skip=()):
+    """Run explicitly requested file tools and print bounded raw evidence."""
+    from core import external_tools as external_tools_mod
+    names = [name for name in external_tools_mod.normalize_tools(tool_names)
+             if name not in set(skip)]
+    if not names:
+        return []
+    if not os.path.isfile(target):
+        warn_line("external file tools ต้องใช้ --target เป็นไฟล์")
+        return []
+    flags = []
+    for name in names:
+        try:
+            report = external_tools_mod.run_external_tool(
+                name, target, wordlist=wordlist, timeout=timeout,
+                hash_mode=hash_mode)
+        except (FileNotFoundError, ValueError) as exc:
+            warn_line(f"{name}: {exc}")
+            continue
+        raw = report.get("raw_output") or report.get("stdout", "")
+        if report.get("status") == "completed":
+            ok_line(f"{name} เสร็จแล้ว ({report.get('elapsed_ms', 0)} ms)")
+        else:
+            warn_line(f"{name} ใช้ไม่ได้: {report.get('stderr', report.get('status'))}")
+        for line in str(raw).splitlines()[:24]:
+            print(f"  [{name}] {line[:240]}")
+        known, candidates = flaglib.extract_flags(str(raw))
+        flags.extend(known + candidates)
+    return list(dict.fromkeys(flags))
+
+
+def run_crypto(target, external_tools=(), wordlist=None, external_timeout=45,
+               hash_mode=0):
     from modules.crypto.autodetect import run_crypto as _run
+    external_flags = []
+    if os.path.isfile(target):
+        external_flags = _run_external_file_tools(
+            target, external_tools, wordlist=wordlist, timeout=external_timeout,
+            hash_mode=hash_mode,
+            skip=("exiftool", "identify", "tesseract", "zbarimg", "zsteg"))
     if os.path.isdir(target):
         from modules.crypto.correlation import correlate
         section("🧩 CROSS-FILE CRYPTO CORRELATION")
@@ -74,10 +113,10 @@ def run_crypto(target):
             known, candidates = flaglib.extract_flags(solution["plaintext"])
             flags.extend(known + candidates)
         if flags:
-            return list(dict.fromkeys(flags))
-        return []
+            return list(dict.fromkeys(external_flags + flags))
+        return external_flags
     from modules.crypto.autodetect import run_crypto as _run
-    return _run(target)
+    return list(dict.fromkeys(external_flags + _run(target)))
 
 
 def run_network(target, **kwargs):
@@ -96,21 +135,37 @@ def run_service(target):
     return result["flags"]
 
 
-def run_image(target):
+def run_image(target, external_tools=(), wordlist=None, external_timeout=45,
+              hash_mode=0):
     from modules.image.forensics import run_image as _run
-    return _run(target)
+    flags = _run(target)
+    extra = _run_external_file_tools(
+        target, external_tools, wordlist=wordlist, timeout=external_timeout,
+        hash_mode=hash_mode,
+        skip=("exiftool", "identify", "tesseract", "zbarimg", "zsteg", "binwalk"))
+    return list(dict.fromkeys(flags + extra))
 
 
-def run_full(target):
+def run_full(target, external_tools=(), wordlist=None, ffuf_threads=40,
+             nmap_ports=None, tool_timeout=45):
     """Auto chain: network scan -> auto web scan on discovered services."""
     section("⚡ AUTO FULL (network -> web chain)")
     info_line(f"target: {target}")
-    flags = run_network(target, chain_to_web=run_web)
+    def chained_web(url):
+        return run_web(url, external_tools=external_tools,
+                       external_wordlist=wordlist,
+                       external_threads=ffuf_threads,
+                       external_timeout=tool_timeout)
+
+    flags = run_network(target, chain_to_web=chained_web,
+                        external_tools=external_tools,
+                        nmap_ports=nmap_ports,
+                        external_timeout=tool_timeout)
     if not flags:
         # maybe the target is a web app directly
         info_line("ไม่พบ web service จาก network scan — ลองรัน web scan ตรงๆ")
         from core import httpx
-        flags = run_web(httpx.normalize_url(target))
+        flags = chained_web(httpx.normalize_url(target))
     return flags
 
 
@@ -434,18 +489,36 @@ def about():
 def dispatch(args):
     report = Report()
     flags = []
+    from core.external_tools import normalize_tools
+    tool_names = normalize_tools(args.external_tools)
     if args.category == "web":
-        flags = run_web(args.target, use_browser=args.browser)
+        flags = run_web(
+            args.target, use_browser=args.browser, external_tools=tool_names,
+            external_wordlist=args.wordlist,
+            external_threads=args.ffuf_threads,
+            external_timeout=args.tool_timeout)
     elif args.category == "crypto":
-        flags = run_crypto(args.target)
+        flags = run_crypto(args.target, external_tools=tool_names,
+                           wordlist=args.wordlist,
+                           external_timeout=args.tool_timeout,
+                           hash_mode=args.hash_mode)
     elif args.category == "network":
-        flags = run_network(args.target)
+        flags = run_network(args.target, external_tools=tool_names,
+                            nmap_ports=args.nmap_ports,
+                            external_timeout=args.tool_timeout)
     elif args.category in ("image", "picture", "pic"):
-        flags = run_image(args.target)
+        flags = run_image(args.target, external_tools=tool_names,
+                          wordlist=args.wordlist,
+                          external_timeout=args.tool_timeout,
+                          hash_mode=args.hash_mode)
     elif args.category == "service":
         flags = run_service(args.target)
     elif args.category == "full":
-        flags = run_full(args.target)
+        flags = run_full(args.target, external_tools=tool_names,
+                         wordlist=args.wordlist,
+                         ffuf_threads=args.ffuf_threads,
+                         nmap_ports=args.nmap_ports,
+                         tool_timeout=args.tool_timeout)
     elif args.module == "jwt":
         from modules.web import jwt
         res = jwt.analyze_jwt(args.target)
@@ -539,6 +612,18 @@ def main():
                         help="งบเวลาสแกนโดยรวมแบบ best-effort")
     parser.add_argument("--max-requests", type=int, default=0,
                         help="งบจำนวน request แบบ best-effort")
+    parser.add_argument("--external-tools", default="",
+                        help="เครื่องมือภายนอกแบบ opt-in เช่น nmap,ffuf")
+    parser.add_argument("--wordlist", default=None,
+                        help="wordlist สำหรับ ffuf/hashcat/john (ค่าเริ่มต้น ffuf: wordlists/common.txt)")
+    parser.add_argument("--ffuf-threads", type=int, default=40,
+                        help="จำนวน thread ของ ffuf (1..128)")
+    parser.add_argument("--nmap-ports", default=None,
+                        help="พอร์ต nmap เช่น 80,443,8000-8100")
+    parser.add_argument("--tool-timeout", type=int, default=45,
+                        help="timeout เครื่องมือภายนอก 1..600 วินาที")
+    parser.add_argument("--hash-mode", type=int, default=0,
+                        help="hashcat mode เมื่อเรียก hashcat (ค่าเริ่มต้น 0=MD5)")
     parser.add_argument("--plan", action="store_true",
                         help="แสดง artifact/capability plan ก่อนรัน")
     parser.add_argument("--nmap-xml", default=None,

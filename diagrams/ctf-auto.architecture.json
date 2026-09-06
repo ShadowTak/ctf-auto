@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CTF Auto Recon & Solver",
+    "output": "ctf-auto.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "scan-entrypoints",
+        "label": "Scan entrypoints",
+        "focus": ["operator", "cli", "web-ui", "planner"],
+        "note": "Compare the menu-driven CLI and Flask upload UI before planning a scan."
+      },
+      {
+        "id": "solver-fanout",
+        "label": "Solver fan-out",
+        "focus": ["planner", "web", "crypto", "network", "artifact-service"],
+        "note": "Follow the planner's bounded routing into the specialized CTF modules."
+      },
+      {
+        "id": "evidence-output",
+        "label": "Evidence to output",
+        "focus": ["web", "crypto", "network", "artifact-service", "evidence", "output"],
+        "note": "See how findings converge into evidence-aware reports and user-facing output."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "CTF Operator",
+      "pos": [40, 300],
+      "size": [150, 64]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "CLI Entrypoint",
+      "pos": [270, 180],
+      "size": [160, 64]
+    },
+    {
+      "id": "web-ui",
+      "type": "frontend",
+      "label": "Flask Web UI",
+      "pos": [270, 420],
+      "size": [160, 64]
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "Deterministic Planner",
+      "pos": [510, 300],
+      "size": [190, 72],
+      "tag": "bounded routing"
+    },
+    {
+      "id": "web",
+      "type": "backend",
+      "label": "Web Modules",
+      "pos": [770, 100],
+      "size": [190, 64]
+    },
+    {
+      "id": "crypto",
+      "type": "security",
+      "label": "Crypto Modules",
+      "pos": [770, 230],
+      "size": [190, 64]
+    },
+    {
+      "id": "network",
+      "type": "backend",
+      "label": "Network Modules",
+      "pos": [770, 360],
+      "size": [190, 64]
+    },
+    {
+      "id": "artifact-service",
+      "type": "backend",
+      "label": "Artifacts & External Tools",
+      "pos": [770, 490],
+      "size": [190, 64]
+    },
+    {
+      "id": "evidence",
+      "type": "security",
+      "label": "Evidence Ledger",
+      "pos": [1030, 300],
+      "size": [190, 72],
+      "tag": "confidence + source"
+    },
+    {
+      "id": "output",
+      "type": "backend",
+      "label": "Reports & Output",
+      "pos": [1280, 300],
+      "size": [190, 72]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Local ctf-auto workspace",
+      "wraps": ["cli", "web-ui", "planner", "web", "crypto", "network", "artifact-service", "evidence", "output"],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {"id": "operator-cli", "from": "operator", "to": "cli", "label": "command / target", "variant": "emphasis", "fromSide": "right", "toSide": "left"},
+    {"id": "operator-web", "from": "operator", "to": "web-ui", "label": "upload / target", "variant": "emphasis", "fromSide": "right", "toSide": "left"},
+    {"id": "cli-planner", "from": "cli", "to": "planner", "label": "category + target", "fromSide": "right", "toSide": "left"},
+    {"id": "web-planner", "from": "web-ui", "to": "planner", "label": "queued job", "fromSide": "right", "toSide": "left"},
+    {"id": "planner-web", "from": "planner", "to": "web", "fromSide": "right", "toSide": "left"},
+    {"id": "planner-crypto", "from": "planner", "to": "crypto", "fromSide": "right", "toSide": "left"},
+    {"id": "planner-network", "from": "planner", "to": "network", "fromSide": "right", "toSide": "left"},
+    {"id": "planner-artifact", "from": "planner", "to": "artifact-service", "fromSide": "right", "toSide": "left"},
+    {"id": "web-evidence", "from": "web", "to": "evidence", "fromSide": "right", "toSide": "left"},
+    {"id": "crypto-evidence", "from": "crypto", "to": "evidence", "fromSide": "right", "toSide": "left"},
+    {"id": "network-evidence", "from": "network", "to": "evidence", "fromSide": "right", "toSide": "left"},
+    {"id": "artifact-evidence", "from": "artifact-service", "to": "evidence", "fromSide": "right", "toSide": "left"},
+    {"id": "evidence-output", "from": "evidence", "to": "output", "variant": "emphasis", "fromSide": "right", "toSide": "left"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "Entry", "items": ["run.py exposes category and module modes", "web_app.py accepts artifact uploads and runs jobs"]},
+    {"dot": "violet", "title": "Routing", "items": ["planner.py classifies files, URLs, and text", "specialized modules stay bounded by target kind"]},
+    {"dot": "emerald", "title": "Trustworthy findings", "items": ["EvidenceLedger preserves source and confidence", "verified, candidate, and raw decode remain distinct", "external tools are opt-in, bounded, and keep raw evidence"]}
+  ]
+}
