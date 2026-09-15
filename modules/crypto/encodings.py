@@ -410,6 +410,19 @@ def dec_html(s):
     return None
 
 
+def dec_reverse(s):
+    """Reverse the string.
+
+    Challenges wrap the real flag in ``[::-1]`` before encoding it, so a
+    hex-decoded body can read ``}ryczvfs543KrnxZ{SGPBERUEROLP`` where only the
+    reversed text carries a readable flag prefix.
+    """
+    if not s or len(s) < 2:
+        return None
+    out = s[::-1]
+    return out if out != s else None
+
+
 def dec_rot13(s):
     return s.translate(str.maketrans(
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
@@ -1305,6 +1318,7 @@ _CHAIN_TRANSFORMS = [
     ("rot13", dec_rot13),
     ("rot47", dec_rot47),
     ("leet", dec_leet),
+    ("reverse", dec_reverse),
     ("morse", dec_morse),
     ("emoji-offset", dec_emoji_offset),
     ("emoji-subst", dec_emoji_subst),
@@ -1446,7 +1460,10 @@ def chain_decode_best(text, max_depth=12, max_branches=6,
         # this keeps rot13/rot47 cycles bounded while allowing transform ->
         # Base64 -> transform chains.
         for name, fn in _CHAIN_TRANSFORMS:
-            if name == last or path_parts.count(name) >= 4:
+            # Reversal is an involution: one application per path is enough,
+            # and repeating it would double the beam for no new coverage.
+            limit = 1 if name == "reverse" else 4
+            if name == last or path_parts.count(name) >= limit:
                 continue
             try:
                 nxt = fn(cur)

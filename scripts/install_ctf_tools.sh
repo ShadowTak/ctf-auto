@@ -4,7 +4,10 @@ set -euo pipefail
 # Install only optional competition tooling. Run as the normal user; Homebrew
 # intentionally refuses root installs on macOS.
 MODE="${1:-check}"
-TOOLS=(nmap tshark exiftool binwalk 7zz zbarimg tesseract magick john sqlmap)
+# steghide is no longer packaged for current Homebrew; stegseek is a
+# maintained steghide fork that extracts and cracks the same payloads.
+TOOLS=(nmap tshark exiftool binwalk 7zz zbarimg tesseract magick john sqlmap
+       steghide stegseek zsteg ffmpeg)
 
 if [[ "$MODE" == "check" ]]; then
   for tool in "${TOOLS[@]}"; do
@@ -13,7 +16,42 @@ if [[ "$MODE" == "check" ]]; then
   exit 0
 fi
 
-[[ "$MODE" == "install" ]] || { echo "Usage: $0 [check|install]" >&2; exit 2; }
+if [[ "$MODE" == "install-steghide" ]]; then
+  # Build stegseek (steghide-compatible) into a user prefix: libmcrypt is gone
+  # from Homebrew, so it is built first, then stegseek is linked against it.
+  PREFIX="${PREFIX:-$HOME/.local/ctf-tools}"
+  command -v brew >/dev/null 2>&1 || { echo "Homebrew is required" >&2; exit 1; }
+  brew install mhash jpeg-turbo zlib cmake >/dev/null
+  WORK="$(mktemp -d)"; mkdir -p "$PREFIX"
+  ( cd "$WORK"
+    curl -sSL -o mcrypt.tgz https://downloads.sourceforge.net/project/mcrypt/Libmcrypt/2.5.8/libmcrypt-2.5.8.tar.gz
+    tar xzf mcrypt.tgz && cd libmcrypt-2.5.8
+    # Old config.sub cannot name modern Apple triples; take automake's copy.
+    cp "$(ls /opt/homebrew/Cellar/automake/*/share/automake-*/config.sub | head -1)" config.sub
+    cp "$(ls /opt/homebrew/Cellar/automake/*/share/automake-*/config.guess | head -1)" config.guess
+    chmod +x config.sub config.guess
+    ./configure --prefix="$PREFIX" --disable-posix-threads --build="$(./config.guess)" \
+      --host="$(./config.guess)" \
+      CFLAGS="-O2 -Wno-implicit-function-declaration -Wno-int-conversion \
+-Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-implicit-int -Wno-return-type -Wno-format"
+    make -j4 && make install
+    cd "$WORK" && git clone --depth 1 https://github.com/RickdeJager/stegseek.git
+    cd stegseek && mkdir -p build && cd build
+    cmake -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_FLAGS="-I/opt/homebrew/include -I$PREFIX/include" \
+      -DCMAKE_C_FLAGS="-I/opt/homebrew/include -I$PREFIX/include" \
+      -DCMAKE_EXE_LINKER_FLAGS="-L/opt/homebrew/lib -L$PREFIX/lib" ..
+    make -j4
+  )
+  cp "$WORK/stegseek/build/src/stegseek" "$PREFIX/bin/stegseek"
+  ln -sf "$PREFIX/bin/stegseek" /opt/homebrew/bin/stegseek 2>/dev/null || true
+  rm -rf "$WORK"
+  echo "stegseek installed: $PREFIX/bin/stegseek"
+  "$0" check
+  exit 0
+fi
+
+[[ "$MODE" == "install" ]] || { echo "Usage: $0 [check|install|install-steghide]" >&2; exit 2; }
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   command -v brew >/dev/null 2>&1 || { echo "Homebrew is required: https://brew.sh" >&2; exit 1; }

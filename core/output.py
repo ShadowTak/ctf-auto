@@ -1,6 +1,7 @@
 """Output helpers — colors, sections, and a Report collector."""
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime
 
@@ -66,11 +67,29 @@ class Report:
         self.lines.append(clean)
 
     def save(self, outdir="reports"):
-        os.makedirs(outdir, exist_ok=True)
-        path = os.path.join(outdir, self.started.strftime("%Y%m%d_%H%M%S") + ".txt")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(self.lines))
-        return path
+        """Write the report, falling back to a writable directory.
+
+        Competition checkouts are often shared or created by another user, so
+        ``reports/`` can be read-only for the account running the scan.  A
+        failed write must never abort a finished run with a traceback.
+        """
+        text = "\n".join(self.lines)
+        stamp = self.started.strftime("%Y%m%d_%H%M%S")
+        directories = [outdir,
+                       os.path.join(tempfile.gettempdir(), "ctf-auto-reports")]
+        for directory in directories:
+            try:
+                os.makedirs(directory, exist_ok=True)
+                path = os.path.join(directory, stamp + ".txt")
+                if os.path.exists(path):
+                    path = os.path.join(directory,
+                                        f"{stamp}_{os.getpid()}.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                return path
+            except OSError:
+                continue
+        return ""
 
 
 class Progress:

@@ -84,6 +84,13 @@ def plan(target):
             pipelines.append("pcap-network")
             if shutil.which("tshark"):
                 pipelines.append("tshark-json-evidence")
+        if kind == "text":
+            try:
+                from modules.logic.gpio import looks_like_logic_capture
+                if looks_like_logic_capture(target):
+                    pipelines.append("logic-analyzer")
+            except Exception:
+                pass
         if kind in {"elf", "pe", "binary"}:
             pipelines.extend(["binary-triage", "embedded-blobs"])
             if shutil.which("r2"):

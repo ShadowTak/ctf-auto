@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = 1
 MAX_FILES = 64
 MAX_BYTES = 16 * 1024 * 1024
+# Text members per artifact that get the expensive crypto chain pass.
+MAX_TEXT_MEMBERS = 12
 
 
 def atomic_json(path, value):
@@ -40,6 +42,13 @@ def atomic_json(path, value):
 def _inventory(target):
     from modules.crypto.correlation import collect
     return collect(str(target), max_files=MAX_FILES, max_bytes=MAX_BYTES)
+
+
+def _text_ratio(text):
+    """Fraction of a decoded member that looks like real text."""
+    if not text:
+        return 0.0
+    return sum(c.isprintable() or c in '\r\n\t' for c in text) / len(text)
 
 
 def engine_digest():
@@ -68,7 +77,8 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
     """Run only inside an isolated worker when a hard deadline is required."""
     import re
     from core.evidence import EvidenceLedger
-    from core.flag import extract_flags, normalize_prefix
+    from core.flag import (extract_decoded, extract_flags_with_decoys,
+                           looks_like_ioc_flag, normalize_prefix)
     from core.artifact_triage import inspect_artifact, json_evidence
     from core.planner import artifact_kind
     from modules.crypto.artifacts import extract
@@ -76,7 +86,7 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
 
     ledger = EvidenceLedger()
     files = _inventory(target)
-    if category not in {'auto', 'crypto', 'image', 'network'}:
+    if category not in {'auto', 'crypto', 'image', 'network', 'logic', 'reverse'}:
         raise ValueError('Unknown artifact category')
     if not files:
         raise ValueError('No readable regular artifacts within the file/byte limits')
@@ -88,23 +98,62 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
         if progress:
             progress(result)
 
-    def scan_text(text, source, verified=True, evidence=()):
-        known, candidates = extract_flags(text)
+    decoy_seen = []
+    decoded_values = []
+
+    def scan_text(text, source, verified=True, evidence=(), decoded=False):
+        known, candidates, decoys = extract_flags_with_decoys(text)
+        for value in decoys:
+            if value not in decoy_seen:
+                decoy_seen.append(value)
+        decoys = set(decoys)
         expected = normalize_prefix(prefix)
         if expected:
-            known += re.findall(re.escape(expected) + r'[^}\r\n]{1,300}\}', text)
-        for value in dict.fromkeys(known + candidates):
+            known += [value for value in
+                      re.findall(re.escape(expected) + r'[^}\r\n]{1,300}\}', text)
+                      if value not in decoys]
+        pool = list(dict.fromkeys(known + candidates))
+        if decoded:
+            # No flag format is imposed: a chain stage with an unfamiliar
+            # prefix (``PLOREUREBPGS{...}`` before ROT13, another event's
+            # convention) is surfaced too, labelled instead of hidden.
+            pool += [value for value in extract_decoded(text)
+                     if value not in pool]
+        for value in pool:
             confirmed = verified and value in known
+            if looks_like_ioc_flag(value):
+                # A domain wrapped in a flag prefix is an indicator to look up,
+                # not a submission: record it and never promote it to an answer.
+                ledger.add(value, source=source, confidence=0.4,
+                           evidence=tuple(evidence) + (
+                               'domain-shaped body: treat as an IOC, not the flag',))
+                result['notes'].append({
+                    'source': source,
+                    'reason': 'flag-shaped domain ignored as an answer (IOC only): '
+                              + value[:120]})
+                continue
+            if decoded and not confirmed and value not in known:
+                # A decode chain over arbitrary text emits brace-shaped ghosts
+                # (``B9Hi{Hp9y~B9HizHp9yqB9Hi}``).  Keep them as raw evidence,
+                # never as a flag claim, unless the challenge gave a prefix.
+                ledger.add(value, source=source, confidence=0.5,
+                           evidence=tuple(evidence) + (
+                               'brace-shaped text from a decode chain; '
+                               'flag format not verified',))
+                decoded_values.append(value)
+                continue
             ledger.add_flag(value, source=source, verified=confirmed,
                             confidence=0.99 if confirmed else 0.65,
                             evidence=tuple(evidence) + ('exact recovered text; scoreboard acceptance untested',))
         return bool(known or candidates)
 
+    deep_members = 0
+    capped_note = False
     solved_sources = set()
     for solved in solve_inventory(files):
         solved_sources.update(solved['sources'])
         source = solved['method'] + ':' + ','.join(solved['sources'])
-        scan_text(solved['plaintext'], source, evidence=solved['evidence'])
+        scan_text(solved['plaintext'], source, evidence=solved['evidence'], decoded=True)
         ledger.add(solved['plaintext'], source=source, confidence=1.0,
                    evidence=solved['evidence'] + ['plaintext hex: ' + solved['plaintext_hex']])
     publish()
@@ -125,7 +174,7 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
             for solved in solve_inventory(bundle):
                 solved_sources.update(solved['sources'])
                 source = solved['method'] + ':' + ','.join(solved['sources'])
-                scan_text(solved['plaintext'], source, evidence=solved['evidence'])
+                scan_text(solved['plaintext'], source, evidence=solved['evidence'], decoded=True)
                 ledger.add(solved['plaintext'], source=source, confidence=1.0,
                            evidence=solved['evidence'] + ['plaintext hex: ' + solved['plaintext_hex']])
         for label, member in members:
@@ -135,24 +184,56 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
                 break
             source = path + ':' + label
             text = member.decode('utf-8', 'replace')
-            found = scan_text(text, source)
+            found = False
+            if _text_ratio(text) >= 0.90:
+                found = scan_text(text, source)
             for encoding in ('utf-16-le', 'utf-16-be'):
-                if b'\x00' in member[:65536]:
-                    found |= scan_text(member.decode(encoding, 'replace'), source + ':' + encoding)
+                if b'\x00' not in member[:65536]:
+                    continue
+                decoded = member.decode(encoding, 'replace')
+                # A compiled manifest, resource table, or class file decodes to
+                # mostly garbage; only accept a reading that is actually text.
+                if _text_ratio(decoded) < 0.90:
+                    continue
+                found |= scan_text(decoded, source + ':' + encoding)
             triage = inspect_artifact(member)
+            if triage['kind'] in {'binary', 'elf', 'pe'}:
+                # UTF-16 text (Android manifests, Win32 resources) is invisible
+                # to plain scanning; pull real runs out instead of decoding the
+                # whole blob, which turns noise into brace-shaped candidates.
+                from modules.reverse.strings import extract_flag_like_strings
+                for value in extract_flag_like_strings(member):
+                    found |= scan_text(value, source + ':extracted-strings')
             if triage['kind'] != 'binary':
                 result['artifacts'].append({'path': source, **{k: v for k, v in triage.items() if k != 'texts'}})
                 for where, content in triage['texts']:
                     found |= scan_text(content, source + ':' + where)
+            if triage['kind'] in {'elf', 'pe'} and category in {'auto', 'reverse'}:
+                from modules.reverse.stack_strings import recover_stack_strings
+                for value in recover_stack_strings(member):
+                    found |= scan_text(value, source + ':stack-string', verified=True,
+                                       evidence=['immediate bytes of mov byte ptr frame stores'])
             publish()  # Keep early evidence even if a deeper solver times out.
-            printable = sum(c.isprintable() or c in '\r\n\t' for c in text) / max(1, len(text))
+            printable = _text_ratio(text)
             if not member or len(member) > 256 * 1024 or printable < 0.90:
                 continue
             if found and not deep:
                 continue
+            # Archives such as an APK hold hundreds of small text members.  Run
+            # the crypto chain on a bounded number of them so a 30MB bundle does
+            # not blow the job deadline; --deep lifts the cap.
+            if not deep and deep_members >= MAX_TEXT_MEMBERS:
+                if not capped_note:
+                    capped_note = True
+                    result['notes'].append({
+                        'source': path,
+                        'reason': 'crypto chain capped at ' + str(MAX_TEXT_MEMBERS) +
+                                  ' text members; use --deep for the rest'})
+                continue
+            deep_members += 1
             from modules.crypto.fastlane import decode_fast, TRANSPORTS
             for method, output in decode_fast(member, prefix=prefix):
-                if scan_text(output, source + ':' + method,
+                if scan_text(output, source + ':' + method, decoded=True,
                              verified=all(part in TRANSPORTS for part in method.split('>')),
                              evidence=['byte-preserving fast path', 'layers: ' + str(len(method.split('>')))]):
                     found = True
@@ -165,7 +246,8 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
             for method, output in chain_decode_best(text, max_depth=12, max_branches=12,
                                                     max_nodes=1200, timeout=3):
                 is_exact = all(part in TRANSPORTS for part in method.split('>'))
-                if scan_text(str(output), source + ':' + method, verified=is_exact):
+                if scan_text(str(output), source + ':' + method, verified=is_exact,
+                             decoded=True):
                     found = True
             publish()
             if (deep or not found) and len(member) <= 32768:
@@ -183,10 +265,28 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
                     ledger.add(str(output)[:5000], source=source + ':' + method,
                                confidence=0.0, evidence=['raw solver output; score=' + str(score)])
                 publish()
+        if kind in ('elf', 'pe', 'binary') and category in {'auto', 'reverse'}:
+            # Binaries that build the flag byte by byte defeat `strings`; the
+            # immediates of their frame stores are the message itself.
+            from modules.reverse.stack_strings import recover_stack_strings
+            for value in recover_stack_strings(data):
+                if scan_text(value, path + ':stack-string', verified=True,
+                             evidence=['immediate bytes of mov byte ptr frame stores']):
+                    break
         if kind in ('pcap', 'pcapng') and category in {'auto', 'network'}:
             from modules.network.pcap import analyze_pcap
             report = analyze_pcap(path)
             result['artifacts'].append({'path': path, 'kind': 'pcap', 'details': json_evidence(report)})
+            for channel in report.get('covert_channels', []):
+                # Messages smuggled in header fields: report the recovered text,
+                # but a self-labelled decoy is provenance, not an answer.
+                result['notes'].append({
+                    'source': path,
+                    'reason': (('covert header channel (' + channel.get('field', '?')
+                                + ') recovered: ' + channel.get('message', ''))[:400]
+                               + (' [decoy]' if channel.get('is_decoy') else ''))})
+                if not channel.get('is_decoy') and channel.get('message'):
+                    scan_text(channel['message'], path + ':pcap-header', verified=False)
             for value in report.get('flags', []):
                 scan_text(value, path + ':pcap', verified=False)
         if kind == 'image' and category in {'auto', 'image'}:
@@ -197,9 +297,39 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
             for finding in report.get('findings', []):
                 ledger.add(finding['value'], kind=finding['kind'], source=path + ':' + finding.get('source', 'image'),
                            confidence=finding.get('confidence', .65), evidence=finding.get('evidence', []))
+        if category in {'auto', 'logic'} and kind == 'text' and len(data) <= 4 * 1024 * 1024:
+            # Hardware/misc captures arrive as CSV/TSV/VCD sample dumps; without
+            # this hook they look like ordinary text and no solver ever runs.
+            from modules.logic.gpio import analyze_logic_capture, looks_like_logic_capture
+            if looks_like_logic_capture(path):
+                logic = analyze_logic_capture(path)
+                best = logic.get('decode', {}).get('best', {})
+                result['artifacts'].append({
+                    'path': path, 'kind': 'logic-capture',
+                    'details': {'bus': logic.get('bus'), 'frames': logic.get('frames'),
+                                'sampling': best.get('sampling'),
+                                'nibble_order': best.get('order')}})
+                evidence = ['logic capture decoded',
+                            'even-parity bus: ' + str(logic.get('bus', {}).get('parity_rate')),
+                            'sampling: ' + str(best.get('sampling'))]
+                for value in logic.get('flags', []):
+                    scan_text(value, path + ':logic', verified=True, evidence=evidence)
+                result['notes'].extend({'source': path, 'reason': note}
+                                       for note in logic.get('notes', []))
         publish()
+    if decoded_values:
+        # Printed alongside the verified answers: "whatever it decoded" is
+        # useful even when the prefix is unknown or the format is unverified.
+        result['decoded'] = decoded_values[:200]
     if len(files) == MAX_FILES:
         result['notes'].append({'reason': 'file-count limit may have truncated this challenge'})
+    if decoy_seen:
+        # Kept in JSON provenance, never in the verified/candidate lists or the
+        # Markdown report: the artifact itself labels these as traps.
+        result['decoys'] = decoy_seen[:200]
+        result['notes'].append({
+            'reason': 'ignored ' + str(len(decoy_seen)) +
+                      ' decoy flag(s) that the artifact marks as fake'})
     result['status'] = 'completed'
     publish()
     return result
@@ -310,6 +440,9 @@ def run_batch(target, *, output='competition-results', jobs=2, seconds=60,
                 if finding.get('kind') in ('verified', 'candidate'):
                     # JSON quoting keeps arbitrary flag syntax literal in a text report.
                     lines.append('- ' + finding['kind'].upper() + ': ' + json.dumps(finding['value'], ensure_ascii=False))
+            # Decoded output with an unverified format is reported, just labelled.
+            for value in job.get('decoded', []) or []:
+                lines.append('- DECODED (format unverified): ' + json.dumps(value, ensure_ascii=False))
             lines.append('')
         (output / 'results.md').write_text('\n'.join(lines), encoding='utf-8')
 

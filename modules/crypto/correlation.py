@@ -14,6 +14,53 @@ _INTEGER_RE = re.compile(
 _HEX_RE = re.compile(r"(?i)\b[0-9a-f]{16,512}\b")
 _B64_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
 
+_ZIP_MAGIC = b"PK\x03\x04"
+# Text-ish members worth reading out of a big archive (APK/Office/JAR).  A
+# challenge answer often lives in AndroidManifest.xml or a resource table, and
+# refusing the whole 30MB APK because of a size cap hides it completely.
+_ARCHIVE_NAMES = {"androidmanifest.xml", "resources.arsc"}
+_ARCHIVE_EXTS = (".xml", ".json", ".txt", ".properties", ".html", ".htm",
+                 ".js", ".csv", ".md", ".yml", ".yaml", ".ini", ".conf")
+_ARCHIVE_BUDGET = 12 * 1024 * 1024
+_ARCHIVE_LIMIT = 40
+
+
+def _archive_members(path, budget=_ARCHIVE_BUDGET, limit=_ARCHIVE_LIMIT):
+    """Boundedly read text-ish members of a zip/apk without unpacking it all."""
+    import zipfile
+    out = []
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = sorted(archive.infolist(), key=lambda i: i.filename)
+            for info in entries:
+                if info.is_dir() or info.file_size > budget:
+                    continue
+                lower = info.filename.lower()
+                if (os.path.basename(lower) not in _ARCHIVE_NAMES and
+                        not lower.endswith(_ARCHIVE_EXTS)):
+                    continue
+                try:
+                    data = archive.read(info)
+                except (OSError, RuntimeError, zipfile.BadZipFile):
+                    continue
+                if not data:
+                    continue
+                out.append((info.filename, data))
+                budget -= len(data)
+                if budget <= 0 or len(out) >= limit:
+                    break
+    except (OSError, zipfile.BadZipFile):
+        return []
+    return out
+
+
+def _is_zip(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4) == _ZIP_MAGIC
+    except OSError:
+        return False
+
 
 def collect(paths, max_files=256, max_bytes=8 * 1024 * 1024):
     """Return a deterministic, bounded recursive artifact inventory."""
@@ -44,6 +91,16 @@ def collect(paths, max_files=256, max_bytes=8 * 1024 * 1024):
         try:
             size = os.path.getsize(path)
             if size > max_bytes or total + size > 64 * 1024 * 1024:
+                # Oversized archives still get a look: read only their text-ish
+                # members so a 30MB APK or Office document is not invisible.
+                if size > max_bytes and len(files) + 1 < max_files and _is_zip(path):
+                    for name, data in _archive_members(path):
+                        files.append({"path": path + ":" + name, "size": len(data),
+                                      "sha256": hashlib.sha256(data).hexdigest(),
+                                      "data": data})
+                        total += len(data)
+                        if len(files) >= max_files:
+                            break
                 continue
             with open(path, "rb") as handle:
                 data = handle.read(max_bytes + 1)

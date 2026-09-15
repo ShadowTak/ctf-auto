@@ -84,7 +84,9 @@ def _run_external_file_tools(target, tool_names, *, wordlist=None, timeout=45,
         for line in str(raw).splitlines()[:24]:
             print(f"  [{name}] {line[:240]}")
         known, candidates = flaglib.extract_flags(str(raw))
-        flags.extend(known + candidates)
+        flags.extend(known)
+        for value in candidates:
+            print("  " + dim(f"? candidate (unverified): {value[:120]}"))
     return list(dict.fromkeys(flags))
 
 
@@ -111,7 +113,9 @@ def run_crypto(target, external_tools=(), wordlist=None, external_timeout=45,
             info_line(solution["method"] + " <- " + ", ".join(solution["sources"]))
             print(solution["plaintext"])
             known, candidates = flaglib.extract_flags(solution["plaintext"])
-            flags.extend(known + candidates)
+            flags.extend(known)
+            for value in candidates:
+                print("  " + dim(f"? candidate (unverified): {value[:120]}"))
         if flags:
             return list(dict.fromkeys(external_flags + flags))
         return external_flags
@@ -144,6 +148,25 @@ def run_image(target, external_tools=(), wordlist=None, external_timeout=45,
         hash_mode=hash_mode,
         skip=("exiftool", "identify", "tesseract", "zbarimg", "zsteg", "binwalk"))
     return list(dict.fromkeys(flags + extra))
+
+
+def run_logic(target):
+    """Decode a logic-analyzer / GPIO capture (hardware + misc challenges)."""
+    from modules.logic.gpio import analyze_logic_capture, format_logic_report
+    section("🔌 LOGIC / GPIO CAPTURE")
+    info_line(f"target: {target}")
+    if not os.path.isfile(target):
+        warn_line("logic ต้องใช้ --target เป็นไฟล์ capture (.csv/.tsv/.vcd)")
+        return []
+    report = analyze_logic_capture(target)
+    for line in format_logic_report(report):
+        print("  " + line)
+    flags = [value for value in report.get("flags", [])]
+    for value in flags:
+        flag_line(value)
+    for value in report.get("candidate_flags", [])[:6]:
+        print("  " + dim(f"? candidate (unverified): {value[:120]}"))
+    return flags
 
 
 def run_full(target, external_tools=(), wordlist=None, ffuf_threads=40,
@@ -396,11 +419,25 @@ def main_menu():
         "4": ("⚡ Auto Full", "network -> web chain อัตโนมัติทั้งสาย"),
         "6": ("โหมดละเอียด (เลือกโมดูล)", "เลือกโมดูลย่อยทีละตัว"),
         "7": ("🖼️ Image forensics", "EXIF / strings / stego / QR / OCR / embedded files"),
+        "8": ("🔌 Logic / GPIO capture", "หา clock/data/parity ในไฟล์ดิจิทัลแล้วถอดข้อความ"),
         "9": ("About / วิธีใช้", "รายละเอียดการใช้งาน"),
     }
     print_menu("MAIN MENU", items)
     choice = ask("เลือก:")
     return choice
+
+
+def submenu_logic():
+    print_menu("LOGIC / GPIO", {
+        "1": ("Auto decode", "หา clock/data/parity แล้วถอดข้อความ"),
+    })
+    choice = ask("เลือก:")
+    if choice in (None, "0"):
+        return None
+    target = input_target("path ไฟล์ capture (.csv/.tsv/.vcd):")
+    if target:
+        return run_logic(target)
+    return None
 
 
 def submenu_crypto():
@@ -513,6 +550,8 @@ def dispatch(args):
                           hash_mode=args.hash_mode)
     elif args.category == "service":
         flags = run_service(args.target)
+    elif args.category in ("logic", "signal", "gpio", "hardware"):
+        flags = run_logic(args.target)
     elif args.category == "full":
         flags = run_full(args.target, external_tools=tool_names,
                          wordlist=args.wordlist,
@@ -560,6 +599,8 @@ def dispatch(args):
                     submenu_network()
             elif choice == "7":
                 submenu_image()
+            elif choice == "8":
+                submenu_logic()
             elif choice == "9":
                 about()
             else:
@@ -568,19 +609,35 @@ def dispatch(args):
         print(dim("จบการทำงาน — ขอบคุณที่ใช้ CTF Auto Recon & Solver"))
 
     path = report.save()
+    # Decoys never reach the summary: a challenge that plants ``...decoy...``
+    # markers (packet captures, images, web pages) must not look solved when it
+    # is not.  Everything else it decoded *is* shown — the tool does not impose
+    # a flag format, it only labels what it could not verify.
+    from core.flag import extract_flags, is_decoy_flag
+    flags = [f for f in dict.fromkeys(flags or ()) if not is_decoy_flag(f)]
+    # A custom-prefix string is often an intermediate chain stage (the reversed
+    # text *before* ROT13).  It is still printed, marked as unverified, instead
+    # of being hidden because a known-prefix answer exists beside it.
+    verified_format = [f for f in flags if extract_flags(f, include_candidates=False)[0]]
     if flags:
         print()
         section("🏁 SUMMARY")
         for f in flags:
-            flag_line(f)
-    info_line(f"บันทึกรายงาน: {path}")
+            if f in verified_format:
+                flag_line(f)
+            else:
+                print("  " + dim(f"? ถอดได้ (รูปแบบไม่ยืนยัน): {f[:120]}"))
+    if path:
+        info_line(f"บันทึกรายงาน: {path}")
+    else:
+        warn_line("บันทึกรายงานไม่ได้ (ไม่มีโฟลเดอร์ที่เขียนได้)")
     return flags
 
 
 def main():
     parser = argparse.ArgumentParser(description="CTF Auto Recon & Solver")
-    parser.add_argument("--category", choices=["auto", "web", "crypto", "network", "image", "picture", "pic", "service", "full"],
-                        help="หมวดที่ต้องการรัน")
+    parser.add_argument("--category", choices=["auto", "web", "crypto", "network", "image", "picture", "pic", "service", "logic", "signal", "gpio", "hardware", "reverse", "full"],
+                        help="หมวดที่ต้องการรัน (logic/signal/gpio สำหรับไฟล์ดักสัญญาณดิจิทัล)")
     parser.add_argument("--module", help="โมดูลเดี่ยว (เช่น jwt)")
     parser.add_argument("--target", help="URL / host / path ไฟล์ / ข้อความ")
     parser.add_argument("--batch", metavar="DIRECTORY", help="แกะหลายโจทย์: ไฟล์/โฟลเดอร์ชั้นแรกแต่ละรายการคือหนึ่งโจทย์")
@@ -648,7 +705,37 @@ def main():
             parser.error(str(exc))
         verified = sum(sum(f.get("kind") == "verified" for f in j.get("findings", []))
                        for j in result["jobs"])
-        print(f"Local verified findings: {verified}; scoreboard acceptance untested")
+        candidates = sum(sum(f.get("kind") == "candidate" for f in j.get("findings", []))
+                         for j in result["jobs"])
+        decoys = sum(len(j.get("decoys") or []) for j in result["jobs"])
+        decoded = sum(len(j.get("decoded") or []) for j in result["jobs"])
+        summary = (f"Findings: {verified} verified, {candidates} candidate"
+                   "; scoreboard acceptance untested")
+        if decoded:
+            summary += f", {decoded} decoded (format unverified)"
+        if decoys:
+            summary += f"  ({decoys} decoy flag(s) ignored)"
+        print(summary)
+        for job in result["jobs"]:
+            # Verified/candidate findings are flag *claims*; decoded output is
+            # shown too because no flag format is imposed on the run.
+            values = [str(f.get("value")) for f in job.get("findings", [])
+                      if f.get("kind") in ("verified", "candidate")]
+            if values:
+                shown = ", ".join(values[:3])
+                more = "" if len(values) <= 3 else f" (+{len(values) - 3} more)"
+                print(f"  {job.get('name', '?')}: {shown}{more}")
+            extra = [str(f.get("value")) for f in job.get("findings", [])
+                     if f.get("kind") == "decode"]
+            if extra:
+                shown = ", ".join(extra[:3])
+                more = "" if len(extra) <= 3 else f" (+{len(extra) - 3} more)"
+                print("  " + dim(f"{job.get('name', '?')}: ถอดได้ (รูปแบบไม่ยืนยัน): "
+                                 f"{shown}{more}"))
+            for note in job.get("notes", []) or []:
+                reason = str(note.get("reason", ""))
+                if "IOC only" in reason:
+                    print(f"  {job.get('name', '?')}: {reason[:160]}")
         print("Results: " + os.path.abspath(os.path.join(args.output, "results.json")))
         if any(j["status"] != "completed" for j in result["jobs"]):
             raise SystemExit(2)

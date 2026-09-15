@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import threading
 from typing import Iterable, Optional
 
-from .flag import extract_flags
+from .flag import extract_flags, is_decoy_flag
 
 _KIND_RANK = {"decode": 0, "candidate": 1, "verified": 2}
 
@@ -66,6 +66,10 @@ class EvidenceLedger:
     def __init__(self):
         self._items = {}
         self._lock = threading.RLock()
+        # Decoys are detected but never surfaced as findings: challenges plant
+        # them to punish blind grepping, and showing one as "the flag" wastes
+        # the whole run.  Only the count is kept for the report.
+        self.decoys = []
 
     @staticmethod
     def _key(value):
@@ -79,6 +83,11 @@ class EvidenceLedger:
         raw = str(value)
         key = self._key(raw)
         if not key:
+            return None
+        if is_decoy_flag(key):
+            with self._lock:
+                if key not in self.decoys:
+                    self.decoys.append(key)
             return None
         kind = _clean_kind(kind)
         evidence = tuple(str(x) for x in (evidence or ()) if str(x))
@@ -137,6 +146,10 @@ class EvidenceLedger:
 
     def verified(self):
         return [x for x in self.all() if x.kind == "verified"]
+
+    def suppressed_decoys(self):
+        with self._lock:
+            return list(self.decoys)
 
     def values(self, kind=None):
         items = self.all()

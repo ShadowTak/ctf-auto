@@ -23,7 +23,8 @@ LINKTYPE = {
 
 
 class Packet:
-    __slots__ = ("ts", "src", "dst", "proto", "sport", "dport", "payload", "flags")
+    __slots__ = ("ts", "src", "dst", "proto", "sport", "dport", "payload", "flags",
+                 "ip_id", "ttl")
 
     def __init__(self):
         self.ts = 0.0
@@ -34,6 +35,12 @@ class Packet:
         self.dport = 0
         self.payload = b""
         self.flags = ""
+        # IPv4 identification + TTL are classic covert channels: a challenge
+        # ships hundreds of identical-looking packets while the ID field
+        # carries an index and a character.  Keep the raw values so the
+        # analyser can reconstruct the message.
+        self.ip_id = None
+        self.ttl = None
 
 
 def _parse_ethernet(data, pkt):
@@ -54,6 +61,8 @@ def _parse_ipv4(data, pkt):
     proto = data[9]
     pkt.src = ".".join(str(b) for b in data[12:16])
     pkt.dst = ".".join(str(b) for b in data[16:20])
+    pkt.ip_id = int.from_bytes(data[4:6], "big")
+    pkt.ttl = data[8]
     payload = data[ihl:]
     if proto == 6:
         pkt.proto = "TCP"
@@ -222,6 +231,78 @@ def _stream_key(src, sport, dst, dport):
     return (a, b) if a <= b else (b, a)
 
 
+# ---------------------------------------------------------------------------
+# Covert channels in IP header fields
+# ---------------------------------------------------------------------------
+def _printable_ratio(data):
+    if not data:
+        return 0.0
+    return sum(1 for b in data if 32 <= b < 127) / len(data)
+
+
+def _index_channel_message(pairs, axis="hi"):
+    """Rebuild text from ``(id_high, id_low)`` pairs hiding (index, char).
+
+    A header-block channel ships one character per packet: the high byte of
+    ``ip.id`` is a position and the low byte a byte of text (or the reverse).
+    Duplicate positions are normal because the generator also emits filler
+    packets, so we try both the first and last value seen at each position and
+    keep whichever reconstruction is the most printable.
+    """
+    by_index = defaultdict(list)
+    for hi, lo in pairs:
+        index, value = (hi, lo) if axis == "hi" else (lo, hi)
+        by_index[index].append(value)
+    best = b""
+    for pick_last in (True, False):
+        out = bytearray()
+        for index in sorted(by_index):
+            values = by_index[index]
+            out.append(values[-1] if pick_last else values[0])
+        if _printable_ratio(bytes(out)) > _printable_ratio(best):
+            best = bytes(out)
+    return best
+
+
+def detect_header_covert_channels(packets):
+    """Recover messages smuggled in IPv4 header fields (classic ``ip.id``).
+
+    Decoy-heavy captures hide one character per packet in a header field while
+    the real traffic looks ordinary.  The bulk ID is treated as the baseline;
+    packets that deviate are treated as the channel and the best readable
+    reconstruction is returned.
+    """
+    pairs = [(pkt.ip_id >> 8, pkt.ip_id & 0xFF) for pkt in packets
+             if getattr(pkt, "ip_id", None) is not None]
+    if len(pairs) < 8:
+        return []
+    counts = defaultdict(int)
+    for hi, lo in pairs:
+        counts[(hi << 8) | lo] += 1
+    baseline = max(counts, key=counts.get)
+    unusual = [(hi, lo) for hi, lo in pairs if ((hi << 8) | lo) != baseline]
+    if len(unusual) < 8 or len({v for _, v in unusual}) < 4:
+        return []
+    best = None
+    for axis, label in (("hi", "ip.id high=index low=char"),
+                        ("lo", "ip.id low=index high=char")):
+        message = _index_channel_message(unusual, axis=axis)
+        ratio = _printable_ratio(message)
+        if ratio < 0.80 or not any(chr(b).isalpha() for b in message):
+            continue
+        if best is None or ratio > best[0]:
+            best = (ratio, label, message)
+    if best is None:
+        return []
+    text = best[2].decode("latin-1")
+    return [{
+        "field": best[1],
+        "packets": len(unusual),
+        "message": text,
+        "is_decoy": flaglib.is_decoy_flag(text),
+    }]
+
+
 def analyze_pcap(path):
     """Full analysis: streams, HTTP, UDP/ICMP payloads, flags."""
     packets = read_packets(path)
@@ -234,6 +315,8 @@ def analyze_pcap(path):
         "icmp": [],
         "conns": set(),
         "flags": [],
+        "decoy_flags": [],
+        "covert_channels": [],
     }
 
     for pkt in packets:
@@ -261,6 +344,12 @@ def analyze_pcap(path):
             info["http"].append((a, b, req, resp))
 
     # flag hunting
+    decoys = set()
+
+    def remember_decoys(text):
+        for value in flaglib.decoy_flags(text):
+            decoys.add(value)
+
     def scan_blob(label, blob):
         for m in re.finditer(rb"[A-Za-z0-9+/=]{24,}", blob):
             try:
@@ -269,6 +358,7 @@ def analyze_pcap(path):
             except Exception:
                 pass
         text = blob.decode("latin-1")
+        remember_decoys(text)
         known, cands = flaglib.extract_flags(text)
         for f in known + cands:
             if f not in info["flags"]:
@@ -293,10 +383,17 @@ def analyze_pcap(path):
         proto_streams,
         udp_payloads=info["udp"],
     )
+    # Covert channel smuggled in packet headers (ip.id / TTL style).
+    info["covert_channels"] = detect_header_covert_channels(packets)
+    for channel in info["covert_channels"]:
+        if channel["is_decoy"]:
+            for value in flaglib.decoy_flags(channel["message"]):
+                decoys.add(value)
     # Collect credentials and protocol findings into flags/indicators
     for cred in info["protocols"].get("credentials", []):
         for val in cred.values():
             if isinstance(val, str) and len(val) > 2:
+                remember_decoys(val)
                 known, cands = flaglib.extract_flags(val)
                 for f in known + cands:
                     if f not in info["flags"]:
@@ -304,6 +401,7 @@ def analyze_pcap(path):
     for f in info["protocols"].get("findings", []):
         val = f.get("value", "")
         if isinstance(val, str):
+            remember_decoys(val)
             known, cands = flaglib.extract_flags(val)
             for flag in known + cands:
                 if flag not in info["flags"]:
@@ -311,10 +409,15 @@ def analyze_pcap(path):
     # DNS tunnel reassembly → flags
     dns = info["protocols"].get("dns_tunnel")
     if dns and dns.get("reassembled"):
+        remember_decoys(dns["reassembled"])
         known, cands = flaglib.extract_flags(dns["reassembled"])
         for f in known + cands:
             if f not in info["flags"]:
                 info["flags"].append(f)
+
+    # Never surface a planted decoy as a finding.
+    info["decoy_flags"] = sorted(decoys)
+    info["flags"] = [f for f in info["flags"] if f not in decoys]
 
     # Passive indicator extraction from all reconstructed and datagram data.
     blobs = []
@@ -334,6 +437,15 @@ def analyze_pcap(path):
             unique = {json.dumps(item, sort_keys=True, default=str): item
                       for item in info["indicators"][key]}
             info["indicators"][key] = list(unique.values())[:200]
+        # Indicators are shown to the operator, so a decoded blob that carries a
+        # self-labelled decoy flag must not survive here either.
+        kept = []
+        for item in info["indicators"][key]:
+            shadow = json.dumps(item, sort_keys=True, default=str)
+            if any(flaglib.decoy_flags(shadow)) or flaglib.is_decoy_flag(shadow):
+                continue
+            kept.append(item)
+        info["indicators"][key] = kept
     return info
 
 
@@ -341,6 +453,17 @@ def format_pcap_report(info):
     """Turn the analysis dict into printable lines."""
     lines = []
     lines.append(f"Packets: {info['packets']}")
+    if info.get("covert_channels"):
+        lines.append("Covert channel in packet headers:")
+        for channel in info["covert_channels"]:
+            tag = " (decoy — do not submit)" if channel.get("is_decoy") else ""
+            lines.append(
+                f"  {channel['field']}  [{channel['packets']} packets]{tag}")
+            lines.append(f"    {channel['message']!r}")
+    if info.get("decoy_flags"):
+        lines.append(f"Decoy flags ignored ({len(info['decoy_flags'])}):")
+        for value in info["decoy_flags"][:40]:
+            lines.append(f"  {value}")
     if info["conns"]:
         lines.append("Connections (TCP):")
         for src, sport, dst, dport in sorted(info["conns"]):

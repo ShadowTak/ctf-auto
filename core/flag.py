@@ -56,8 +56,194 @@ def _has_code_artifacts(flag):
     return any(c in code_chars for c in body)
 
 
+# Challenges plant decoy flags to punish blind grepping: packet captures, images and
+# web pages carry marker text such as "<<DECOY - NOT THE REAL FLAG, DO NOT SUBMIT>>"
+# right next to the fake value.  Reporting those as findings is worse than useless.
+_DECOY_RE = re.compile(
+    r"(?i)(?:<<\s*decoy|\bdecoy\w*|not[_ -]the[_ -]real[_ -]flag|not[_ -]the[_ -]flag|"
+    r"do[_ -]not[_ -]submit|fake[_ -]?flag|false[_ -]?flag|wrong[_ -]?flag|"
+    r"dummy[_ -]?flag|decoy[_ -]?flag|is[_ -]?only[_ -]?the[_ -]?decoy|"
+    r"not[_ -]?real|placeholder[_ -]?flag|example[_ -]?flag)"
+)
+
+
+def is_decoy_flag(value, context=""):
+    """True when a flag-shaped string (or its surrounding text) is marked as a decoy."""
+    return bool(_DECOY_RE.search(str(value or ""))) or bool(_DECOY_RE.search(str(context or "")))
+
+
+def decoy_flags(text, before=16, after=24):
+    """Return flag-shaped strings that the artifact itself marks as decoys.
+
+    Decoys are annotated *in place* (``FLAG{...} <<DECOY - NOT THE REAL FLAG>>``),
+    so only the same line around a match is inspected: a marker on another line
+    must not invalidate a real flag that happens to follow one.
+    """
+    if not text:
+        return []
+    out = []
+    for pattern in (FLAG_RE, _NAKED_RE, CANDIDATE_RE):
+        for match in pattern.finditer(text):
+            value = match.group(0)
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_end = text.find("\n", match.end())
+            if line_end < 0:
+                line_end = len(text)
+            lead = text[max(line_start, match.start() - before):match.start()]
+            trail = text[match.end():min(line_end, match.end() + after)]
+            if is_decoy_flag(value, lead + " " + trail):
+                out.append(value)
+    return sorted(set(out))
+
+
+# Characters that signal a wrong decode when they pile up in a flag body.
+_STRONG_SYMBOLS = set("~`!@#$%^&*()=+[]|\\;:'\"<>?")
+
+
+def _garbled_body(body):
+    """Decode garbage often forms flag lookalikes (``ctf{htet5##Oe@CwcAESEEEEAEaw}``).
+
+    Real flag bodies rarely repeat the same character four times in a row, and
+    those runs are the signature of a wrong decode being wrapped in braces.
+    """
+    return bool(re.search(r"(.)\1\1\1", body))
+
+
+def _symbol_storm(body):
+    """True when a body carries two or more decodes-only symbol characters."""
+    return sum(1 for c in body if c in _STRONG_SYMBOLS) >= 2
+
+
+_DOMAIN_BODY_RE = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+
+
+def looks_like_ioc_flag(value):
+    """True when a flag-shaped string is really an indicator, not an answer.
+
+    Challenge authors hide values such as
+    ``CYBERHEROCTF{drp32k77.todoinfonet.com}`` inside binaries as a decoy: the
+    domain is the lead (look it up), the wrapped string is never the answer.
+    """
+    text = str(value or "")
+    if "{" not in text or "}" not in text:
+        return False
+    body = text[text.find("{") + 1:text.rfind("}")]
+    return bool(_DOMAIN_BODY_RE.match(body))
+
+
+def _repeated_token(body):
+    """True when a body is one token repeated three or more times."""
+    for size in range(2, len(body) // 2 + 1):
+        if len(body) % size == 0 and body == body[:size] * (len(body) // size):
+            return True
+    return False
+
+
+def looks_like_noise_flag(value):
+    """Brace-shaped text that is almost certainly decode/LSB noise.
+
+    Bit-plane, LSB and XOR hunts over compressed or random data emit thousands
+    of brace-shaped ghosts such as ``CJ{oint}`` or
+    ``Metaspolit{metaspolitmetaspolit}``.  Callers hunting raw planes should
+    drop these instead of showing them as findings; ordinary text sources are
+    left alone because short real flags do exist.
+    """
+    text = str(value or "")
+    if "{" not in text or "}" not in text:
+        return False
+    body = text[text.find("{") + 1:text.rfind("}")]
+    if len(body) < 4:
+        return True
+    if re.search(r"(.)\1\1\1", body):
+        return True
+    if _repeated_token(body):
+        return True
+    # A short body with no structure (no underscore, no digits) is the shape of
+    # a random brace pair, not a flag: 'oint', 'cOcc', 'jgtcpI'.
+    return len(body) < 8 and "_" not in body and not any(c.isdigit() for c in body)
+
+
+# A decoded payload is not required to use a known flag prefix: competitions
+# invent prefixes (``CYBERHEROCTF``, ``AegisCTF``) and chain stages such as a
+# pre-ROT13 ``PLOREUREBPGS{...}`` are still worth showing.  Only shapes that
+# are provably decode noise are removed here.
+_DECODED_MIN_RATIO = 0.6
+
+
+def extract_decoded(text, limit=60):
+    """Brace-shaped strings recovered by a decoder, in *any* flag format.
+
+    The scanner deliberately does not impose a flag format.  Known-prefix
+    answers come first, then every other brace-shaped result that is not a
+    decoy and not provable noise, so a run can be read as "whatever it
+    decoded" instead of "whatever matched the vocabulary".
+    """
+    if not text:
+        return []
+    text = str(text)
+    known = set(FLAG_RE.findall(text))
+    out = []
+    for match in CANDIDATE_RE.finditer(text):
+        value = match.group(0)
+        if len(value) > 320 or len(value) < 6:
+            continue
+        if _has_code_artifacts(value) or _body_ratio(value) < _DECODED_MIN_RATIO:
+            continue
+        if looks_like_noise_flag(value) or is_decoy_flag(value):
+            continue
+        out.append(value)
+    # Known prefixes and plausible bodies rank first so a real answer is never
+    # buried under incidental brace pairs from the same buffer.
+    return sorted(dict.fromkeys(out),
+                  key=lambda v: (v not in known, not _plausible_candidate(v), v))[:limit]
+
+
+_GENERIC_PREFIX_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,29}$")
+
+
+def _plausible_candidate(value):
+    """Generic brace-wrapped candidates must at least look like a flag name.
+
+    Heuristic decoders produce gems such as ``00200{H005}``, ``eeee{ee}`` and
+    ``22{U2e2pMEc22c}``; reporting those as flags wastes a competition run.
+    """
+    start = value.find("{")
+    end = value.rfind("}")
+    if start < 0 or end <= start:
+        return False
+    prefix, body = value[:start], value[start + 1:end]
+    if not _GENERIC_PREFIX_RE.match(prefix):
+        return False
+    if len(body) < 3 or len(set(body)) < 2:
+        return False
+    # A real flag body always carries some letters (leetspeak included).
+    return any(ch.isalpha() for ch in body)
+
+
+def looks_plausible_flag(value):
+    """Reject brace-wrapped decode garbage while keeping real flag syntax.
+
+    Both conditions must hold to reject, so leet bodies with repeated digits
+    (``ctf{a0000b11}``) and symbolic-but-readable bodies (``ctf{!@#complex}``)
+    survive; only strings that are *both* repetitive and symbol-heavy (the
+    signature of a heuristic solver guessing the wrong transform) are dropped.
+    """
+    text = str(value or "")
+    if "{" not in text or "}" not in text:
+        return True
+    body = text[text.find("{") + 1:text.rfind("}")]
+    if not body:
+        return False
+    return not (_garbled_body(body) and _symbol_storm(body))
+
+
 def extract_flags(text, include_candidates=True):
-    """Return (known_flags, candidate_flags) as sorted unique lists."""
+    """Return (known_flags, candidate_flags) as sorted unique lists.
+
+    Decoys are excluded from both lists; use :func:`decoy_flags` when the
+    caller wants to report that it deliberately ignored something.
+    """
     if not text:
         return [], []
     known = sorted(set(FLAG_RE.findall(text)) | set(_NAKED_RE.findall(text)))
@@ -67,8 +253,23 @@ def extract_flags(text, include_candidates=True):
                   _body_ratio(c) >= 0.85 and
                   not _has_code_artifacts(c) and
                   len(c) < 200 and
-                  len(c) > 5]
+                  len(c) > 5 and
+                  _plausible_candidate(c) and
+                  not _garbled_body(c[c.find("{") + 1:c.rfind("}")])]
+    decoys = set(decoy_flags(text))
+    known = [value for value in known
+             if value not in decoys and looks_plausible_flag(value)]
+    candidates = [value for value in candidates if value not in decoys]
     return known, candidates
+
+
+def extract_flags_with_decoys(text, include_candidates=True):
+    """Return ``(known, candidates, decoys)`` for evidence-aware callers."""
+    known, candidates = extract_flags(text, include_candidates=include_candidates)
+    decoys = decoy_flags(text)
+    # known/candidates were filtered against decoys already; recompute the
+    # decoy list only from strings that also matched a flag shape.
+    return known, candidates, decoys
 
 
 # known prefixes sorted longest-first for brace-wrapping below

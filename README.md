@@ -278,6 +278,18 @@ python3 -m playwright install chromium
 หรือ `CTF_AUTO_WORKERS` ได้ ส่วน `--max-seconds`/`--max-requests` เป็นงบแบบ
 best-effort สำหรับหยุดงานใหม่ก่อนเครื่องหรือเป้าหมายจะถูกใช้งานหนักเกินไป
 
+### 🏁 สกอร์การ์ด (รันซ้ำกับชุดไฟล์จริง)
+
+```bash
+# ตรวจเครื่องมือที่ขาด แล้วติดตั้ง steghide/stegseek ให้อัตโนมัติ
+scripts/install_ctf_tools.sh check
+scripts/install_ctf_tools.sh install-steghide
+
+# รัน worker ตัวเดียวกับ CLI บนโฟลเดอร์โจทย์ แล้วเทียบกับ answer key
+python3 scripts/scorecard_artifacts.py --dir "/path/to/challenges" --seconds 75
+python3 scripts/scorecard_artifacts.py --dir "..." --answers my-key.json --json out.json
+```
+
 ### 🌐 Web UI (Beautiful dark-themed interface)
 
 ```bash
@@ -396,6 +408,9 @@ python3 run.py --category full --target 10.10.10.5      # auto: scan → เจ�
 - flag ทุกตัวที่เจอขึ้นที่หน้าจอ + บันทึกใน `reports/<timestamp>/`
 - รู้จัก prefix ของหลายเวที (picoCTF, HTB, THCTT, NCSA และอื่นๆ) + generic candidate เช่น `customEvent{...}`
 - ถ้าโจทย์ระบุ `prefix=` หรือ `flag_format=` จะใช้ prefix นั้นกับ solver ที่ต้องสร้าง flag; ถ้าไม่ระบุจะคืน plaintext/candidate โดยไม่เดา prefix ของเวทีใด
+- **ไม่มีการล็อกรูปแบบ flag**: อะไรที่ถอดออกมาได้จะแสดงหมด ถ้า prefix ไม่รู้จักหรือเป็นขั้นกลางของ chain (เช่น `PLOREUREBPGS{...}` ก่อน ROT13) จะติดป้าย `ถอดได้ (รูปแบบไม่ยืนยัน)` แทนการซ่อน ส่วนที่ยืนยันรูปแบบได้จะขึ้นเป็น `🏁`
+- decoy ที่โจทย์เขียนกำกับเอง (`<<DECOY - NOT THE REAL FLAG>>`, `..._decoy`) จะถูกกันออกและนับไว้ใน `decoys` ของ JSON — ไม่หลุดมาเป็นคำตอบ
+- FLAG ปลอมที่ตั้งใจให้ไปสืบต่อ (body เป็นชื่อโดเมน) จะถูกบันทึกเป็น `IOC only` ไม่ใช่คำตอบ
 - ผล decode ที่เป็นข้อความเพี้ยนยังแสดงตาม raw output เพื่อให้ตรวจสอบเองได้; ระบบไม่ห่อข้อความนั้นเป็น flag อัตโนมัติ
 
 ## หมายเหตุ

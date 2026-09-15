@@ -19,15 +19,20 @@ import struct
 import subprocess
 import tempfile
 import tarfile
+import time
 import zipfile
 import zlib
 
 from core.evidence import EvidenceLedger
-from core.flag import extract_flags
+from core.flag import extract_flags, looks_like_noise_flag
 
 MAX_READ = 128 * 1024 * 1024
 MAX_LIST = 240
 MAX_TEXT = 1800
+# Wall-clock ceiling for the crypto chain pass over image-derived snippets.
+# A single autodetect call can spend seconds on adversarial noise, so a
+# challenge whose image yields many snippets must still return in time.
+_DECODE_TEXT_BUDGET = 8.0
 MAX_TOOL_OUTPUT = 12000
 
 _MAGICS = (
@@ -596,35 +601,173 @@ def _tool(name, args, timeout=18):
         return {"tool": name, "available": True, "error": str(exc)}
 
 
-def run_optional_tools(path):
+def _harvest_passphrases(data, text_hints=()):
+    """Collect candidate passphrases a challenge hands out in plain sight.
+
+    Authors routinely leave the passphrase in a trailing comment, a PNG text
+    chunk or a sibling ``password.txt``; steghide/rar then open with it.
+    """
+    found = []
+
+    def add(value):
+        value = str(value or "").strip().strip("'\"`")
+        if 3 <= len(value) <= 64 and value not in found:
+            found.append(value)
+
+    for value in text_hints:
+        add(value)
+    for match in re.finditer(rb"(?i)(?:password|passphrase|pass|key|hint)\s*[:=]\s*"
+                             rb"([\x20-\x7e]{3,64})", data[:2_000_000]):
+        text = match.group(1).decode("ascii", "ignore").strip()
+        add(text.split()[0] if text.split() else text)
+    # Bare tokens left after an image end marker ("...LSB pass: ORAORAORA").
+    for match in re.finditer(rb"[A-Za-z0-9_!@#$%^&*]{6,32}", data[-4096:]):
+        token = match.group(0).decode("ascii", "ignore")
+        if not token.lower().startswith(("http", "exif", "icc")):
+            add(token)
+    return found[:12]
+
+
+# Common throwaway passphrases plus the filename; stegseek adds its own
+# defaults (empty password, file name) unless told to skip them.
+_STEGSEEK_DEFAULTS = ("password", "secret", "flag", "cyberhero", "oraoraora",
+                      "steghide", "ctf", "admin")
+
+
+def _steghide_commands(path, passphrases):
+    """steghide attempts: empty passphrase first, then harvested hints."""
+    workdir = tempfile.mkdtemp(prefix="ctf-steghide-")
+    commands = [("steghide",
+                 ["extract", "-sf", path, "-p", "", "-f", "-xf",
+                  os.path.join(workdir, "extract-empty.bin")], 25)]
+    for index, passphrase in enumerate(passphrases[:6]):
+        commands.append((f"steghide(pass={passphrase})",
+                         ["steghide", "extract", "-sf", path, "-p", passphrase,
+                          "-f", "-xf",
+                          os.path.join(workdir, f"extract-{index}.bin")], 25))
+    return workdir, commands
+
+
+def _stegseek_command(path, passphrases, workdir):
+    """Stegseek is a maintained steghide fork: same embedding, extract + crack.
+
+    Original steghide is not packaged for current macOS/Homebrew builds, so
+    when only stegseek is present the empty password and every harvested hint
+    are handed over as a wordlist.
+    """
+    wordlist = os.path.join(workdir, "stegseek-passphrases.txt")
+    guesses = [str(p) for p in passphrases if str(p)] + list(_STEGSEEK_DEFAULTS)
+    with open(wordlist, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(dict.fromkeys(guesses)) + "\n")
+    output = os.path.join(workdir, "stegseek-out.bin")
+    return ("stegseek", [path, wordlist, output], 45)
+
+
+def run_optional_tools(path, passphrases=(), extras=()):
+    workdir, steghide_commands = _steghide_commands(path, list(passphrases))
+    hints = list(passphrases)
+    lower = str(path).lower()
+    embed_tools = []
+    if shutil.which("steghide"):
+        embed_tools = [("steghide", ["info", "-p", "", "-sf", path], 15)] + \
+                      steghide_commands
+    elif shutil.which("stegseek"):
+        name, args, timeout = _stegseek_command(path, hints, workdir)
+        embed_tools = [(name, args, timeout)]
+    else:
+        embed_tools = [("steghide", ["info", "-p", "", "-sf", path], 15)] + \
+                      steghide_commands
     commands = [
         ("exiftool", ["-j", "--", path], 20),
         ("identify", ["-verbose", path], 20),
         ("strings", ["-a", "-n", "4", "--", path], 12),
         ("zbarimg", ["--raw", "--quiet", "--", path], 15),
         ("tesseract", [path, "stdout", "--psm", "6"], 30),
-        ("steghide", ["info", "-p", "", "-sf", path], 15),
+    ] + embed_tools + [
+        # zsteg only understands PNG/BMP, binwalk's flags differ across builds.
         ("zsteg", ["-a", path], 30),
-        ("binwalk", ["--signature", "--quiet", path], 30),
-    ]
+        ("binwalk", ["-q", path], 30),
+    ] + list(extras)
+    always_report = ("exiftool", "tesseract", "zbarimg", "steghide", "stegseek",
+                     "zsteg", "binwalk")
     results = []
     for name, args, timeout in commands:
+        if name == "zsteg" and not lower.endswith((".png", ".bmp")):
+            continue
         result = _tool(name, args, timeout)
-        if result.get("available") or name in ("exiftool", "tesseract", "zbarimg"):
+        if result.get("available") or name in always_report:
             results.append(result)
+    for result in results:
+        if str(result.get("tool", "")) == "stegseek" and not result.get("available"):
+            result["output"] = ("stegseek is not installed - build it (or plain "
+                                "steghide) to extract embedded payloads")
+        if str(result.get("tool", "")).startswith("steghide") and not result.get("available"):
+            result["output"] = ("steghide is not installed - install it to extract "
+                                "embedded files. Current Homebrew no longer ships "
+                                "steghide; build stegseek (a steghide fork) or run "
+                                "scripts/install_ctf_tools.sh install-steghide. "
+                                "The tool then retries the empty passphrase plus "
+                                "every harvested hint.")
+        elif str(result.get("tool", "")).startswith("steghide(pass=") \
+                and "error" not in result:
+            result["tool"] = "steghide attempt"
+    extracted = []
+    for entry in sorted(os.listdir(workdir)):
+        target = os.path.join(workdir, entry)
+        try:
+            with open(target, "rb") as handle:
+                blob = handle.read(MAX_READ)
+        except OSError:
+            continue
+        if not blob:
+            continue
+        extracted.append({"file": entry, "size": len(blob),
+                          "text": _clip(_printable(blob), 4096),
+                          "hex": blob[:512].hex()})
+    shutil.rmtree(workdir, ignore_errors=True)
+    # Successful extractions are reported as their own evidence entries so the
+    # decoded text reaches the flag/decoder stage like any other source.
+    for entry in extracted:
+        results.append({"tool": "steghide-extracted", "available": True,
+                        "output": entry["text"] or entry["hex"],
+                        "extracted": entry})
     return results
 
 
-def _flag_evidence(ledger, text, source, verified=False, confidence=.7):
+def _is_stego_source(source):
+    """Sources produced by brute-force plane/bit scanning rather than by the
+    artifact's own structure."""
+    text = str(source or "").lower()
+    return any(token in text for token in ("pixel", "bit-plane", "stego",
+                                           "pillow", "plane"))
+
+
+def _flag_evidence(ledger, text, source, verified=False, confidence=.7,
+                   allow_candidates=True):
     known, candidates = extract_flags(text, include_candidates=True)
+    if not allow_candidates:
+        # Bit-plane / LSB sources are noise: keep only flag-shaped text that
+        # survives the strict plausibility test, so raw planes stop spraying
+        # findings like ``CJ{oint}`` into the report.
+        known = [value for value in known if not looks_like_noise_flag(value)]
     for value in known:
         ledger.add_flag(value, source=source, verified=verified,
                         confidence=confidence,
                         evidence=("direct flag-shaped text",))
+    candidates = [value for value in candidates
+                  if not looks_like_noise_flag(value)]
     for value in candidates:
-        ledger.add_flag(value, source=source, verified=False,
-                        confidence=min(confidence, .68),
-                        evidence=("generic flag-shaped candidate",))
+        # Bit-plane hunts surface thousands of brace-shaped ghosts; they stay
+        # in the decode trail instead of the candidate-flag list unless the
+        # caller asks for them (raw metadata/text sources).
+        if allow_candidates:
+            ledger.add_flag(value, source=source, verified=False,
+                            confidence=min(confidence, .68),
+                            evidence=("generic flag-shaped candidate",))
+        else:
+            ledger.add(value, source=source, confidence=0.0,
+                       evidence=["brace-shaped text from a stego plane; "
+                                 "not treated as a flag"])
 
 
 def _decode_texts(texts, ledger):
@@ -638,26 +781,46 @@ def _decode_texts(texts, ledger):
         value = _text(value).strip()
         if not value or len(value) < 4:
             continue
-        stego_source = str(source).lower()
-        is_stego = ("pixel" in stego_source or "bit-plane" in stego_source
-                    or "stego" in stego_source)
+        is_stego = _is_stego_source(source)
         _flag_evidence(ledger, value, source, verified=not is_stego,
-                       confidence=.68 if is_stego else .94)
+                       confidence=.68 if is_stego else .94,
+                       allow_candidates=not is_stego)
+        if source.startswith("tool:"):
+            # Tool dumps (identify -verbose, exiftool, strings) are evidence, not
+            # ciphertext.  Chaining decoders over them only invents brace-shaped
+            # candidates and burns the job deadline.
+            continue
         if len(value) <= 5000 and (re.fullmatch(r"[A-Za-z0-9+/=_-]{8,}", value) or
                                    re.fullmatch(r"[0-9a-fA-F :,-]{8,}", value) or
                                    "\\" in value or "  " in value):
             if value not in seen_values:
                 seen_values.add(value)
                 candidates.append((source, value))
+    # Real metadata/residual snippets first; raw stego planes last, because
+    # they are the most expensive and least likely to be a chain encoding.
+    candidates.sort(key=lambda item: _is_stego_source(item[0]))
+    deadline = time.monotonic() + _DECODE_TEXT_BUDGET
     for source, value in candidates[:14]:
+        if time.monotonic() > deadline:
+            decodes.append({"source": "decode-budget",
+                            "note": "crypto chain pass hit its time budget; "
+                                    "run --deep for more"})
+            break
         try:
             ranked, findings = analyze_text_evidence(value)
         except Exception as exc:
             decodes.append({"source": source, "error": str(exc)})
             continue
+        stego_decode = _is_stego_source(source)
         for item in findings:
-            ledger.add(item.value, kind=item.kind, source=f"{source}->{item.source}",
-                        confidence=item.confidence, evidence=item.evidence)
+            # A repeated-token or short structureless body is decode noise, not
+            # a flag: e.g. ``Metaspolit{metaspolit...x13}`` from a bit plane.
+            if looks_like_noise_flag(item.value):
+                continue
+            kind = "decode" if (stego_decode and item.kind == "candidate") \
+                else item.kind
+            ledger.add(item.value, kind=kind, source=f"{source}->{item.source}",
+                       confidence=item.confidence, evidence=item.evidence)
         for score, label, output in (ranked or [])[:18]:
             output = _text(output)
             if output and output != value and _printable(output):
@@ -711,6 +874,9 @@ def analyze_image(path, run_tools=True):
     report["trailing_bytes"] = parsed.get("trailing_bytes", 0)
     report["strings"] = extract_strings(data)
     report["embedded"] = inspect_embedded_payloads(data, report["signatures"])
+    report["passphrases"] = _harvest_passphrases(
+        data, [item.get("value", "") for item in report["metadata"]] +
+        list(report["text"]))
     try:
         from .pixel_stego import extract_pixel_planes
         pixel_results, pixel_note = extract_pixel_planes(path)
@@ -738,8 +904,32 @@ def analyze_image(path, run_tools=True):
     if report["file"]["entropy"] >= 7.6:
         report["anomalies"].append(
             "very high byte entropy; encrypted/compressed/appended data is possible")
+    try:
+        from .hinted_stego import parse_hints, sweep as sweep_hints
+        hints = parse_hints(list(report["text"]) +
+                            [str(item.get("value", ""))
+                             for item in report["metadata"] if item.get("is_text")] +
+                            [item.get("value", "") for item in report["metadata"]])
+        report["stego_hints"] = hints
+        if hints.get("seed") is not None:
+            hint_results, hint_note = sweep_hints(path, hints)
+            if hint_results:
+                report["stego"] = _unique(report["stego"] + [
+                    {"method": "seeded %s / %s (channel %s plane %s)" % (
+                        item["generator"], item["mapping"], item["channel"],
+                        item["plane"]),
+                     "output": item["text"], "score": item["score"],
+                     "hint": item} for item in hint_results])
+            if hint_note:
+                report["anomalies"].append(hint_note)
+        elif hints.get("raw"):
+            report["anomalies"].append(
+                "image advertises stego hints without a usable seed: " +
+                "; ".join(hints["raw"])[:200])
+    except Exception as exc:  # optional hint sweep must never break parsing
+        report["anomalies"].append(f"hint sweep unavailable: {exc}")
     if run_tools:
-        report["tools"] = run_optional_tools(path)
+        report["tools"] = run_optional_tools(path, passphrases=report["passphrases"])
 
     ledger = EvidenceLedger()
     text_inputs = []
@@ -767,6 +957,9 @@ def analyze_image(path, run_tools=True):
     _flag_evidence(ledger, json.dumps(report["signatures"]),
                    "embedded-signature", verified=False, confidence=.45)
     report["findings"] = [item.as_dict() for item in ledger.all()]
+    # Kept out of findings/verified/candidate lists on purpose: these are the
+    # traps the challenge planted, and no summary should offer them as answers.
+    report["decoy_flags"] = ledger.suppressed_decoys()
     report["verified_flags"] = ledger.values("verified")
     report["candidate_flags"] = ledger.values("candidate")
     report["summary"] = {
@@ -777,7 +970,9 @@ def analyze_image(path, run_tools=True):
         "signatures": len(report["signatures"]),
         "embedded": len(report["embedded"]),
         "tools_run": sum(1 for x in report["tools"] if x.get("available")),
-        "verified_flags": len(report["verified_flags"]), "candidate_flags": len(report["candidate_flags"]),
+        "verified_flags": len(report["verified_flags"]),
+        "candidate_flags": len(report["candidate_flags"]),
+        "decoy_flags": len(report["decoy_flags"]),
     }
     return report
 
@@ -831,10 +1026,15 @@ def run_image(path, run_tools=True):
         for item in report["tools"]:
             info_line(f"{item.get('tool')}: {item.get('output', item.get('error', 'not installed'))}")
     section("Findings")
-    for item in report["findings"]:
-        if item["kind"] == "verified":
-            flag_line(item["value"])
-        else:
-            warn_line(f"{item['kind'].upper()} [{item['source']}] {item['value']}")
+    verified = [item for item in report["findings"] if item["kind"] == "verified"]
+    candidates = [item for item in report["findings"] if item["kind"] == "candidate"]
+    for item in verified:
+        flag_line(item["value"])
+    for item in candidates:  # guesses stay secondary and clearly labelled
+        warn_line(f"UNVERIFIED GUESS [{item['source']}] {item['value']}")
+    for value in report.get("decoy_flags", []):
+        info_line(f"decoy ignored (do not submit): {value}")
+    if not verified and not candidates:
+        info_line("no flag-shaped text found in this image")
     info_line("summary: " + json.dumps(report["summary"], ensure_ascii=False))
     return report["verified_flags"]
