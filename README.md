@@ -1,5 +1,19 @@
 # 🚩 CTF Auto Recon & Solver
 
+## M6 update — one `auto`, no hangs, pwn triage
+
+- **`--category auto` รับได้ทุกแบบในคำสั่งเดียว** — ไฟล์/โฟลเดอร์ (แกะ artifact), URL (สแกนเว็บ), host/`host:port` (network→web), หรือข้อความ/บล็อบ (crypto). ตรวจชนิดเป้าหมายให้อัตโนมัติแล้วส่งเข้าหมวดที่ถูกต้อง
+- **กันค้างทุก path** — หมวดที่แตะเน็ตเวิร์ก (web/network/service/full) มี *hard wall-clock deadline* เป็นค่าเริ่มต้น: SIGALRM ตัด I/O ที่ค้าง + daemon backstop บังคับออกถ้า loop ระดับ C ไม่ยอมหยุด. ปรับด้วย `--max-seconds` (0 = ปิด). งาน batch ยังแยก process + SIGKILL ต่อโจทย์เหมือนเดิม
+- **Pwn/reverse triage** — `--category reverse` (และในโหมด auto) วิเคราะห์ ELF/PE แบบ static: checksec (NX/PIE/RELRO/canary), dangerous imports (`gets`/`system`/`printf`…), ฟังก์ชัน `win`/backdoor + address, `/bin/sh`/flag strings แล้วสรุปรูปแบบการโจมตี (ret2win / ret2system / format string / shellcode). ไม่รัน exploit ให้ — เป็นข้อมูลให้คนตัดสินใจ
+- **เครื่องมือ/ไลบรารีเพิ่ม** — `gmpy2` (เร่ง integer root ของ RSA low-exponent/Hastad), `scapy`, `stegseek` (crack steghide), `foremost` (file carving), `gobuster`. ตรวจด้วย `./ctf doctor`
+
+```bash
+./ctf --category auto --target ./chal.bin         # แกะ artifact
+./ctf --category auto --target http://10.10.10.5:8080   # สแกนเว็บ
+./ctf --category auto --target 10.10.10.5:1337    # network → web
+./ctf --category reverse --target ./pwnable       # pwn triage
+```
+
 ## Competition workspace / M5 update
 
 หน้าเว็บใหม่ธีม cyber แยก **Auto CTF / Crypto / Web / Network / Image** พร้อมฟอร์ม คิวและผลเฉพาะหมวด, คิวไฟล์ขนานสูงสุด 4 process, animation ที่หยุดได้ และ Export JSON

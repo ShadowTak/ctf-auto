@@ -265,6 +265,19 @@ def solve_target(target, *, prefix=None, deep=False, passwords=(), category='aut
                     ledger.add(str(output)[:5000], source=source + ':' + method,
                                confidence=0.0, evidence=['raw solver output; score=' + str(score)])
                 publish()
+        if kind in ('elf', 'pe') and category in {'auto', 'reverse'}:
+            # Static pwn triage: mitigations, dangerous imports, win functions
+            # and shell strings. These are intel for an operator, never a flag
+            # claim, so they land in artifacts/notes and not the ledger.
+            from modules.reverse.pwn_triage import triage_binary
+            triage = triage_binary(data, path)
+            result['artifacts'].append({
+                'path': path, 'kind': 'pwn-triage',
+                'details': {k: triage[k] for k in (
+                    'format', 'arch', 'bits', 'mitigations', 'dangerous_calls',
+                    'win_functions', 'shell_strings', 'format_string_risk')}})
+            for line in triage.get('summary', []):
+                result['notes'].append({'source': path, 'reason': 'pwn: ' + line})
         if kind in ('elf', 'pe', 'binary') and category in {'auto', 'reverse'}:
             # Binaries that build the flag byte by byte defeat `strings`; the
             # immediates of their frame stores are the message itself.
@@ -443,6 +456,11 @@ def run_batch(target, *, output='competition-results', jobs=2, seconds=60,
             # Decoded output with an unverified format is reported, just labelled.
             for value in job.get('decoded', []) or []:
                 lines.append('- DECODED (format unverified): ' + json.dumps(value, ensure_ascii=False))
+            # Pwn triage is intel, not a flag: list the likely attack shapes.
+            for note in job.get('notes', []) or []:
+                reason = str(note.get('reason', ''))
+                if reason.startswith('pwn:'):
+                    lines.append('- PWN: ' + reason[len('pwn:'):].strip())
             lines.append('')
         (output / 'results.md').write_text('\n'.join(lines), encoding='utf-8')
 

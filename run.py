@@ -169,6 +169,48 @@ def run_logic(target):
     return flags
 
 
+def run_reverse(target):
+    """Static triage of an ELF/PE binary: strings, stack-strings, pwn intel."""
+    section("🧬 REVERSE / PWN TRIAGE")
+    info_line(f"target: {target}")
+    if not os.path.isfile(target):
+        warn_line("reverse ต้องใช้ --target เป็นไฟล์ binary (ELF/PE)")
+        return []
+    with open(target, "rb") as handle:
+        data = handle.read()
+    flags = []
+    from modules.reverse.pwn_triage import triage_binary
+    report = triage_binary(data, os.path.basename(target))
+    info_line(f"format: {report['format']}  arch: {report.get('arch')}  "
+              f"bits: {report.get('bits')}")
+    mit = report.get("mitigations") or {}
+    if mit:
+        print("  mitigations: " + ", ".join(
+            f"{k.upper()}={v}" for k, v in mit.items() if v is not None))
+    for call in report.get("dangerous_calls", []):
+        print("  " + dim(f"dangerous: {call['name']} — {call['why']}"))
+    for win in report.get("win_functions", []):
+        ok_line(f"win/backdoor function: {win['name']} @ {win['addr']}")
+    for shell in report.get("shell_strings", []):
+        ok_line(f"shell/flag string: {shell['value']} @ offset {shell['offset']}")
+    for line in report.get("summary", []):
+        print("  → " + line)
+    for note in report.get("notes", []):
+        print("  " + dim(note))
+    # Strings + stack-strings may carry the flag directly on easy challenges.
+    from modules.reverse.strings import extract_flag_like_strings
+    from modules.reverse.stack_strings import recover_stack_strings
+    section("🔎 FLAG-LIKE STRINGS")
+    for value in list(extract_flag_like_strings(data)) + list(recover_stack_strings(data)):
+        known, candidates = flaglib.extract_flags(value)
+        for hit in known:
+            flag_line(hit)
+            flags.append(hit)
+        for value2 in candidates:
+            print("  " + dim(f"? candidate (unverified): {value2[:120]}"))
+    return list(dict.fromkeys(flags))
+
+
 def run_full(target, external_tools=(), wordlist=None, ffuf_threads=40,
              nmap_ports=None, tool_timeout=45):
     """Auto chain: network scan -> auto web scan on discovered services."""
@@ -552,6 +594,8 @@ def dispatch(args):
         flags = run_service(args.target)
     elif args.category in ("logic", "signal", "gpio", "hardware"):
         flags = run_logic(args.target)
+    elif args.category in ("reverse", "pwn", "rev", "binary"):
+        flags = run_reverse(args.target)
     elif args.category == "full":
         flags = run_full(args.target, external_tools=tool_names,
                          wordlist=args.wordlist,
@@ -689,6 +733,18 @@ def main():
                         help="public URL ของ attacker JWK (สำหรับ JWT jku; ต้อง host jwks.json เอง)")
     args = parser.parse_args()
 
+    # `auto` on a single target routes itself: a file/dir is unpacked by the
+    # isolated batch engine, while a URL, host or raw blob falls through to the
+    # matching direct scanner — one command covers both "แกะ" and "ค้น".
+    if args.category == "auto" and not args.batch:
+        if not args.target:
+            parser.error("auto ต้องระบุ --target เป็นไฟล์/โฟลเดอร์/URL/host/ข้อความ")
+        from core.routing import category_for_target
+        mapped, kind = category_for_target(args.target)
+        if mapped != "batch":
+            info_line(f"auto: ตรวจพบเป้าหมายแบบ {kind} → รันหมวด {mapped}")
+            args.category = mapped
+
     if args.batch or args.category == "auto":
         if args.batch and (args.target or args.category or args.module):
             parser.error("ใช้ --batch แยกจาก --target/--category/--module")
@@ -802,7 +858,22 @@ def main():
 
     if (args.category or args.module) and not args.target:
         parser.error("ต้องระบุ --target ด้วยเมื่อใช้ --category/--module")
-    dispatch(args)
+
+    # Guarantee a direct scan cannot run forever. Network categories get a
+    # finite default; local compute stays uncapped unless --max-seconds is set.
+    from core import budget as _budget, watchdog as _watchdog
+    deadline = _watchdog.default_deadline(args.category, args.max_seconds)
+    if deadline:
+        _budget.configure(seconds=deadline, requests=int(args.max_requests or 0))
+        _watchdog.arm(deadline, label=str(args.category or "scan"))
+        info_line(f"deadline กันค้าง: {deadline}s (ปรับด้วย --max-seconds, 0=ปิด)")
+    try:
+        dispatch(args)
+    except _watchdog.Deadline as exc:
+        warn_line(str(exc) + " — แสดงผลเท่าที่ถอดได้")
+    finally:
+        _watchdog.disarm()
+        _budget.clear()
 
 
 if __name__ == "__main__":

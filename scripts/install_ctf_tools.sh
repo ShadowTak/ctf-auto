@@ -6,8 +6,8 @@ set -euo pipefail
 MODE="${1:-check}"
 # steghide is no longer packaged for current Homebrew; stegseek is a
 # maintained steghide fork that extracts and cracks the same payloads.
-TOOLS=(nmap tshark exiftool binwalk 7zz zbarimg tesseract magick john sqlmap
-       steghide stegseek zsteg ffmpeg)
+TOOLS=(nmap tshark exiftool binwalk foremost 7zz zbarimg tesseract magick john
+       sqlmap ffuf gobuster steghide stegseek zsteg ffmpeg radare2)
 
 if [[ "$MODE" == "check" ]]; then
   for tool in "${TOOLS[@]}"; do
@@ -56,10 +56,12 @@ fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   command -v brew >/dev/null 2>&1 || { echo "Homebrew is required: https://brew.sh" >&2; exit 1; }
   [[ "$(id -u)" -ne 0 ]] || { echo "Run this script as your normal user, not root." >&2; exit 1; }
-  brew install nmap wireshark exiftool binwalk sevenzip zbar tesseract imagemagick john-jumbo sqlmap
+  brew install nmap wireshark exiftool binwalk foremost sevenzip zbar tesseract \
+    imagemagick john-jumbo sqlmap ffuf gobuster stegseek radare2
 elif command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
-  sudo apt-get install -y nmap tshark libimage-exiftool-perl binwalk 7zip zbar-tools tesseract-ocr imagemagick john sqlmap
+  sudo apt-get install -y nmap tshark libimage-exiftool-perl binwalk foremost 7zip \
+    zbar-tools tesseract-ocr imagemagick john sqlmap ffuf gobuster radare2
 else
   echo "Unsupported package manager; install optional tools manually." >&2
   exit 1

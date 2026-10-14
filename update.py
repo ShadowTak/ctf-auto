@@ -29,6 +29,9 @@ TOOL_COMMANDS = {
     "tesseract": "tesseract",
     "steghide": "steghide",
     "zsteg": "zsteg",
+    "stegseek": "stegseek",
+    "foremost": "foremost",
+    "gobuster": "gobuster",
     "binwalk": "binwalk",
     "nmap": "nmap",
     "tshark": "tshark",
@@ -43,6 +46,9 @@ BREW_PACKAGES = {
     "identify": "imagemagick",
     "zbarimg": "zbar",
     "steghide": "steghide",
+    "stegseek": "stegseek",
+    "foremost": "foremost",
+    "gobuster": "gobuster",
     "binwalk": "binwalk",
     "7zz": "sevenzip",
     "tesseract": "tesseract",
@@ -51,6 +57,8 @@ BREW_PACKAGES = {
 }
 PYTHON_MODULES = {
     "Crypto": "pycryptodome",
+    "gmpy2": "gmpy2",
+    "scapy": "scapy",
     "PIL": "Pillow",
     "playwright": "playwright",
     "sympy": "sympy",

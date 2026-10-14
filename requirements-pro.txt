@@ -12,3 +12,5 @@ pwntools>=4.15
 pyelftools>=0.32
 capstone>=5.0
 pypdf>=6.0
+gmpy2>=2.1
+scapy>=2.5

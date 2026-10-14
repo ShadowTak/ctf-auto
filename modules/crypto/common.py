@@ -5,6 +5,11 @@ import re
 import string
 from collections import Counter
 
+try:  # optional C acceleration for big-integer roots
+    import gmpy2 as _GMPY2
+except ImportError:  # pragma: no cover - pure-Python fallback stays correct
+    _GMPY2 = None
+
 # ---------------------------------------------------------------------------
 # English n-gram model (built from an embedded corpus so the tool is offline)
 # ---------------------------------------------------------------------------
@@ -215,13 +220,19 @@ def invmod(a, m):
 def iroot(n, k):
     """Integer k-th root (floor) — Newton's method, no floats. The float
     guess in older versions lost precision on big numbers (10^83 off for a
-    979-bit input) and looped forever."""
+    979-bit input) and looped forever.
+
+    When gmpy2 is installed its C implementation is used instead: identical
+    floor result, far faster on the large moduli that Hastad/low-exponent RSA
+    attacks cube-root."""
     if n < 0:
         raise ValueError("negative")
     if n == 0:
         return 0
     if k == 1:
         return n
+    if _GMPY2 is not None:
+        return int(_GMPY2.iroot(int(n), int(k))[0])
     # upper-bound start via bit length, then Newton converge
     bits = n.bit_length()
     x = 1 << ((bits + k - 1) // k)

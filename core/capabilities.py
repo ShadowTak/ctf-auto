@@ -31,8 +31,10 @@ def detect_capabilities():
     """Return optional solver/browser capabilities without importing them."""
     result = [
         _module("Crypto", "PyCryptodome"),
+        _module("gmpy2", "gmpy2 big-integer acceleration"),
         _module("z3", "Z3 constraint solver"),
         _module("sympy", "SymPy number theory"),
+        _module("scapy", "Scapy packet parsing/crafting"),
         _module("fpylll", "fpylll lattice backend"),
         _module("playwright", "Playwright browser automation"),
         _module("requests", "Requests HTTP backend"),
@@ -49,6 +51,8 @@ def detect_capabilities():
                           ("exiftool", "exiftool"),
                           ("tesseract", "tesseract"), ("zbarimg", "zbarimg"),
                           ("steghide", "steghide"), ("zsteg", "zsteg"),
+                          ("stegseek", "stegseek"), ("foremost", "foremost"),
+                          ("gobuster", "gobuster"),
                           ("binwalk", "binwalk"), ("identify", "identify"),
                           ("7zip", "7zz")):
         found = shutil.which(command)

@@ -63,7 +63,13 @@ class DirBuster:
             return sum(1 for k in kw if k in p.lower())
         candidates.sort(key=rank, reverse=True)
         self.found = []
+        from core import budget, cancel
         for item, result in pmap(self._check, candidates, workers=self.workers, desc="dirbust"):
+            # Stop consuming the wordlist once the scan budget or a stop request
+            # fires, so a 100k-entry list yields partial results instead of
+            # running into the hard deadline.
+            if budget.expired() or cancel.cancelled():
+                break
             if isinstance(result, Exception):
                 continue
             for full, r in result:
